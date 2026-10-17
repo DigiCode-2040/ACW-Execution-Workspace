@@ -24,7 +24,8 @@ A **local-only, command-first execution workspace** for launching approved Pytho
 - Runtime catalog reload and argument passing to discovered scripts
 - Script selector beside Run Selected, plus Exit App in Preferences
 - Task → Working Parts → Output panels for each execution
-- Connected, flow, layered 2.5D, and collapsed layout modes
+- Connected, flow, layered 2.5D, collapsed, and spatial Canvas layout modes
+- Canvas job nodes with live progress rings, expandable details, draggable/persisted positions, pan, zoom, and auto-arrange
 - Four themes (Cyan Cyberpunk default, Quantum Violet, Matrix Green, Industrial Amber)
 - Glass opacity, edge glow, compact-density preferences (saved locally in the embedded webview)
 - Job status, elapsed time, CPU and task memory via `psutil`, stdout, stage events, progress, and optional quality
@@ -70,9 +71,12 @@ layout connected
 layout flow
 layout layered
 layout collapsed
+layout canvas
 stop <job-id>
 clear
 ```
+
+Canvas is an optional fifth layout; the four existing layouts remain available. Its nodes can be dragged with a pointer or focused and moved with the arrow keys. Select a node's title/progress control to expand or collapse its three-panel job details. Use the Canvas controls to zoom, reset the view, or auto-arrange all nodes; Ctrl+mouse wheel zooms and dragging the empty surface pans. Node positions and zoom are saved in the webview's local preferences. Canvas currently shows jobs independently; connectors and job relationships are not modeled.
 
 Scripts in the catalog are discovered when the app starts. Use `catalog reload` to rescan the `scripts/` folder while the app is running; invalid metadata is reported and leaves the existing catalog unchanged. For example, `run organize --target "C:\Users\you\Downloads Archive" --dry-run` passes the remaining tokens as arguments to the organizer script. Single- or double-quoted values preserve spaces. The Run Selected button launches the selected script without arguments.
 
@@ -149,6 +153,7 @@ Relative artifact paths are resolved from the project root. For an output direct
 
 - **Enter** runs the terminal command; **Shift+Enter** inserts a new line.
 - **Up/Down** navigates command history when the caret is on the first/last line.
+- In Canvas layout, drag a node or focus its header and use the arrow keys to reposition it.
 - Floating toolbar menus announce their expanded state and return focus to the trigger when closed with **Escape**.
 
 ## Architecture and limitations

@@ -7,7 +7,7 @@ class API:
 
     def catalog(self): return self.engine.catalog()
     def jobs(self): return self.engine.snapshot()
-    def start_job(self, name, arguments=None): return self.engine.start(name, arguments)
+    def start_job(self, name, script_args=None): return self.engine.start(name, script_args)
     def reload_catalog(self): return self.engine.reload_catalog()
     def cancel_job(self, job_id): return self.engine.cancel(job_id)
     def open_artifact(self, job_id, artifact): return self.engine.open_artifact(job_id, artifact)

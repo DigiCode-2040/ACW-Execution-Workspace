@@ -1,35 +1,139 @@
 'use strict';
-const defaults={theme:'cyan',layout:'connected',historyCount:5,opacity:78,glow:true,compact:false,monitors:['cpu','systemmem','taskmem','started','ended','runtime','events','quality','output']};
+const defaults={theme:'cyan',layout:'connected',historyCount:5,opacity:78,glow:true,compact:false,canvasZoom:1,canvasPositions:{},monitors:['cpu','systemmem','taskmem','started','ended','runtime','events','quality','output']};
 let prefs={...defaults}, jobs=[], history=[], catalogEntries=[], bridgeReady=false, busy=false;
 let commandHistory=[],commandHistoryIndex=0,commandDraft='',jobStatusFilter='all',jobSearch='';
 try{prefs={...defaults,...JSON.parse(localStorage.getItem('acw.preferences')||'{}')}}catch{}
+if(!prefs.canvasPositions||typeof prefs.canvasPositions!=='object')prefs.canvasPositions={};
+if(!Number.isFinite(prefs.canvasZoom))prefs.canvasZoom=1;
+prefs.canvasZoom=Math.max(.5,Math.min(1.5,prefs.canvasZoom));
+let canvasExpanded=new Set(),canvasDragging=false;
 const $=id=>document.getElementById(id);
 const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const monLabels={cpu:'CPU utilization',systemmem:'System memory*',taskmem:'Task memory',started:'Started',ended:'Ended',runtime:'Runtime',events:'Events',quality:'Quality',output:'Output'};
 const palettes={cyan:['#4ee6ef','#071019','#112736'],violet:['#bca3ff','#100d1c','#29203b'],green:['#78e4ac','#091712','#16362b'],amber:['#ffc36c','#1a130b','#3a2b1b']};
 function save(){try{localStorage.setItem('acw.preferences',JSON.stringify(prefs))}catch{}}
-function apply(){const [accent,bg,surface]=palettes[prefs.theme]||palettes.cyan;const r=document.documentElement.style;r.setProperty('--accent',accent);r.setProperty('--bg',bg);r.setProperty('--surface',surface);r.setProperty('--glow',prefs.glow?'1':'0');r.setProperty('--glass',prefs.opacity+'%');r.setProperty('--surface',`color-mix(in srgb, ${surface} ${prefs.opacity}%, transparent)`);document.body.classList.toggle('compact',prefs.compact);$('jobs').className='jobs '+prefs.layout;$('theme').value=prefs.theme;$('history-count').value=prefs.historyCount;$('hist-val').textContent=prefs.historyCount;$('opacity').value=prefs.opacity;$('opacity-val').textContent=prefs.opacity+'%';$('glow').checked=prefs.glow;$('compact').checked=prefs.compact;renderHistory();renderJobs();save()}
+function apply(){const [accent,bg,surface]=palettes[prefs.theme]||palettes.cyan;const r=document.documentElement.style;r.setProperty('--accent',accent);r.setProperty('--bg',bg);r.setProperty('--surface',surface);r.setProperty('--glow',prefs.glow?'1':'0');r.setProperty('--glass',prefs.opacity+'%');r.setProperty('--surface',`color-mix(in srgb, ${surface} ${prefs.opacity}%, transparent)`);document.body.classList.toggle('compact',prefs.compact);$('jobs').className='jobs '+prefs.layout;document.querySelectorAll('[name=layout]').forEach(input=>input.checked=input.value===prefs.layout);$('theme').value=prefs.theme;$('history-count').value=prefs.historyCount;$('hist-val').textContent=prefs.historyCount;$('opacity').value=prefs.opacity;$('opacity-val').textContent=prefs.opacity+'%';$('glow').checked=prefs.glow;$('compact').checked=prefs.compact;renderHistory();renderJobs();save()}
 function log(s){history.push({time:new Date().toLocaleTimeString(),text:s});history=history.slice(-200);renderHistory()}
 function renderHistory(){$('history').innerHTML=history.slice(-prefs.historyCount).map(x=>`<div class="entry"><time>${escapeHTML(x.time)}</time><span>${escapeHTML(x.text)}</span></div>`).join('')||'<span class="subtle">Ready. Type help for commands.</span>'}
 function metric(label,value){return `<div class="metric"><span>${escapeHTML(label)}</span><span>${escapeHTML(value)}</span></div>`}
+function jobDetails(j){
+  const m=prefs.monitors,show=(k,label,val)=>m.includes(k)?metric(label,val):'';
+  const output=(j.output||[]).slice(-6).map(escapeHTML).join('\n');
+  const events=(j.events||[]).slice(-6).map(e=>escapeHTML(e.kind+': '+e.message)).join('\n');
+  const artifacts=(j.artifacts||[]).map(artifact=>`<div class="artifact-row"><span title="${escapeHTML(artifact)}">${escapeHTML(artifact)}</span><button class="artifact-action" aria-label="Open artifact ${escapeHTML(artifact)}" data-action="open" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Open</button><button class="artifact-action" aria-label="Reveal artifact ${escapeHTML(artifact)}" data-action="reveal" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Reveal</button></div>`).join('');
+  return `<div class="panels"><div class="pane"><h3>TASK / OVERVIEW</h3>${metric('Script',j.name)}${show('started','Started',j.started||'—')}${show('ended','Ended',j.ended||'—')}${show('runtime','Runtime',j.runtime+' s')}${show('cpu','CPU',j.cpu+' %')}${show('taskmem','Task memory',j.memory_mb+' MB')}${show('systemmem','System memory','Not collected')}</div><div class="pane"><h3>WORKING PARTS</h3>${metric('Stage',j.stage)}${metric('Progress',j.progress+'%')}<div class="bar"><i style="width:${Math.max(0,Math.min(100,Number(j.progress)||0))}%"></i></div>${m.includes('events')?`<div class="logs">${events||'Waiting for events…'}</div>`:''}</div><div class="pane"><h3>OUTPUT / RESULTS</h3>${show('quality','Quality',j.quality==null?'Not evaluated':j.quality+'%')}${metric('Exit code',j.exit_code??'—')}${m.includes('output')?`<div class="logs">${output||'Awaiting output…'}</div>`:''}${artifacts?`<div class="artifact-list"><h4>ARTIFACTS</h4>${artifacts}</div>`:''}</div></div>`;
+}
+function canvasPosition(job,index){
+  const saved=prefs.canvasPositions[job.id];
+  if(saved&&Number.isFinite(saved.x)&&Number.isFinite(saved.y))return {x:Math.max(16,saved.x),y:Math.max(16,saved.y)};
+  return {x:32+(index%3)*310,y:32+Math.floor(index/3)*190};
+}
+function resizeCanvasWorld(node){
+  const world=$('jobs').querySelector('.canvas-world');
+  if(!world)return;
+  const zoom=prefs.canvasZoom;
+  const x=parseFloat(node.style.getPropertyValue('--node-x'))||0;
+  const y=parseFloat(node.style.getPropertyValue('--node-y'))||0;
+  const right=(x+(node.classList.contains('expanded')?900:278)+40)*zoom;
+  const bottom=(y+210)*zoom;
+  world.style.width=`${Math.ceil(Math.max(parseFloat(world.style.width)||0,$('jobs').clientWidth-2,right))}px`;
+  world.style.height=`${Math.ceil(Math.max(parseFloat(world.style.height)||0,$('jobs').clientHeight-2,bottom))}px`;
+}
 function renderJobs(){
   const el=$('jobs');
+  const previousScroll=prefs.layout==='canvas'?{left:el.scrollLeft,top:el.scrollTop}:null;
   el.className='jobs '+prefs.layout;
+  el.classList.toggle('has-expanded',prefs.layout==='canvas'&&canvasExpanded.size>0);
   const matches=jobs.filter(job=>{
     const statusMatches=jobStatusFilter==='all'||(jobStatusFilter==='active'?['queued','running','cancelling'].includes(job.status):job.status===jobStatusFilter);
     const searchable=[job.label,job.name,job.id,job.status,job.stage,...(job.output||[]),...(job.events||[]).map(event=>event.message),...(job.artifacts||[])].join(' ').toLowerCase();
     return statusMatches&&searchable.includes(jobSearch.toLowerCase());
   });
   $('job-filter-count').textContent=`${matches.length} of ${jobs.length} jobs`;
+  const controls=$('canvas-controls');
+  controls.hidden=prefs.layout!=='canvas';
+  $('canvas-zoom-label').textContent=`${Math.round(prefs.canvasZoom*100)}%`;
   if(!jobs.length){el.innerHTML='<div class="empty">No executions yet. Select a script above or type run &lt;command&gt;.</div>';return}
   if(!matches.length){el.innerHTML='<div class="empty">No jobs match the current filters.</div>';return}
-  el.innerHTML=matches.map(j=>{
-    const m=prefs.monitors,show=(k,label,val)=>m.includes(k)?metric(label,val):'';
-    const output=(j.output||[]).slice(-6).map(escapeHTML).join('\n');
-    const events=(j.events||[]).slice(-6).map(e=>escapeHTML(e.kind+': '+e.message)).join('\n');
-    const artifacts=(j.artifacts||[]).map(artifact=>`<div class="artifact-row"><span title="${escapeHTML(artifact)}">${escapeHTML(artifact)}</span><button class="artifact-action" aria-label="Open artifact ${escapeHTML(artifact)}" data-action="open" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Open</button><button class="artifact-action" aria-label="Reveal artifact ${escapeHTML(artifact)}" data-action="reveal" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Reveal</button></div>`).join('');
-    return `<article class="job"><div class="job-head"><div><b>${escapeHTML(j.label)}</b> <span class="meta">#${escapeHTML(j.id)}</span></div><div><span class="pill ${escapeHTML(j.status)}">${escapeHTML(j.status)}</span> ${j.status==='running'?`<button class="cancel" data-id="${escapeHTML(j.id)}">Stop</button>`:''}</div></div><div class="panels"><div class="pane"><h3>TASK / OVERVIEW</h3>${metric('Script',j.name)}${show('started','Started',j.started||'—')}${show('ended','Ended',j.ended||'—')}${show('runtime','Runtime',j.runtime+' s')}${show('cpu','CPU',j.cpu+' %')}${show('taskmem','Task memory',j.memory_mb+' MB')}${show('systemmem','System memory','Not collected')}</div><div class="pane"><h3>WORKING PARTS</h3>${metric('Stage',j.stage)}${metric('Progress',j.progress+'%')}<div class="bar"><i style="width:${Math.max(0,Math.min(100,Number(j.progress)||0))}%"></i></div>${m.includes('events')?`<div class="logs">${events||'Waiting for events…'}</div>`:''}</div><div class="pane"><h3>OUTPUT / RESULTS</h3>${show('quality','Quality',j.quality==null?'Not evaluated':j.quality+'%')}${metric('Exit code',j.exit_code??'—')}${m.includes('output')?`<div class="logs">${output||'Awaiting output…'}</div>`:''}${artifacts?`<div class="artifact-list"><h4>ARTIFACTS</h4>${artifacts}</div>`:''}</div></div></article>`;
-  }).join('');
+  if(prefs.layout==='canvas'){
+    const positions=matches.map(job=>canvasPosition(job,Math.max(0,jobs.findIndex(candidate=>candidate.id===job.id))));
+    const width=Math.max(el.clientWidth-2,...positions.map((position,index)=>position.x+(canvasExpanded.has(matches[index].id)?900:278)+40));
+    const height=Math.max(el.clientHeight-2,...positions.map(position=>position.y+210));
+    const zoom=prefs.canvasZoom;
+    el.innerHTML=`<div class="canvas-world" style="width:${Math.ceil(width*zoom)}px;height:${Math.ceil(height*zoom)}px"><div class="canvas-nodes" style="width:${width}px;height:${height}px;transform:scale(${zoom})">${matches.map((job,index)=>{
+      const progress=Math.max(0,Math.min(100,Number(job.progress)||0));
+      const position=positions[index];
+      const expanded=canvasExpanded.has(job.id);
+      return `<article class="job canvas-node ${escapeHTML(job.status)}${expanded?' expanded':''}" data-job-id="${escapeHTML(job.id)}" style="--node-x:${position.x}px;--node-y:${position.y}px;--progress-angle:${progress*3.6}deg"><div class="canvas-node-head"><div class="canvas-node-grab" title="Drag to arrange this job"><button class="canvas-expand" aria-expanded="${expanded}" aria-label="${expanded?'Collapse':'Expand'} details for ${escapeHTML(job.label)}"><span class="progress-ring" aria-hidden="true"></span><span class="canvas-node-copy"><b>${escapeHTML(job.label)}</b><span class="canvas-stage">${escapeHTML(job.stage||job.status)} · ${progress}%</span></span></button><span class="canvas-node-status">${escapeHTML(job.status)}</span></div><div class="canvas-node-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}<span class="meta">#${escapeHTML(job.id)}</span></div></div>${jobDetails(job)}</article>`;
+    }).join('')}</div></div>`;
+    el.querySelectorAll('.canvas-node').forEach(node=>{
+      const id=node.dataset.jobId;
+      const button=node.querySelector('.canvas-expand');
+      button.onclick=()=>{
+        const wasExpanded=canvasExpanded.has(id);
+        canvasExpanded.clear();
+        if(!wasExpanded)canvasExpanded.add(id);
+        renderJobs();
+        if(!wasExpanded){
+          const expandedNode=el.querySelector(`.canvas-node[data-job-id="${CSS.escape(id)}"]`);
+          const index=jobs.findIndex(job=>job.id===id);
+          const position=canvasPosition(matches.find(job=>job.id===id),Math.max(0,index));
+          el.scrollLeft=Math.max(0,position.x*prefs.canvasZoom-(el.clientWidth-expandedNode.offsetWidth*prefs.canvasZoom)/2);
+          el.scrollTop=Math.max(0,position.y*prefs.canvasZoom-(el.clientHeight-expandedNode.offsetHeight*prefs.canvasZoom)/2);
+        }
+      };
+      const grab=node.querySelector('.canvas-node-grab');
+      grab.tabIndex=0;
+      grab.setAttribute('role','group');
+      grab.setAttribute('aria-label',`Drag ${node.querySelector('.canvas-node-copy b').textContent} to arrange. Use arrow keys to move.`);
+      grab.onkeydown=event=>{
+        const offsets={ArrowLeft:[-20,0],ArrowRight:[20,0],ArrowUp:[0,-20],ArrowDown:[0,20]};
+        const offset=offsets[event.key];
+        if(!offset)return;
+        event.preventDefault();
+        const index=jobs.findIndex(job=>job.id===id);
+        const position=canvasPosition(matches[index],index);
+        const x=Math.max(16,position.x+offset[0]),y=Math.max(16,position.y+offset[1]);
+        prefs.canvasPositions[id]={x,y};
+        node.style.setProperty('--node-x',`${x}px`);
+        node.style.setProperty('--node-y',`${y}px`);
+        resizeCanvasWorld(node);
+        save();
+      };
+      grab.onpointerdown=event=>{
+        if(event.target.closest('button')||event.button!==0)return;
+        event.preventDefault();
+        canvasDragging=true;
+        grab.setPointerCapture(event.pointerId);
+        const startX=event.clientX,startY=event.clientY;
+        const index=jobs.findIndex(job=>job.id===id);
+        const start=canvasPosition(matches.find(job=>job.id===id),Math.max(0,index));
+        const move=moveEvent=>{
+          const x=Math.max(16,start.x+(moveEvent.clientX-startX)/zoom);
+          const y=Math.max(16,start.y+(moveEvent.clientY-startY)/zoom);
+          node.style.setProperty('--node-x',`${x}px`);
+          node.style.setProperty('--node-y',`${y}px`);
+          resizeCanvasWorld(node);
+        };
+        const finish=()=>{
+          if(!canvasDragging)return;
+          canvasDragging=false;
+          grab.removeEventListener('pointermove',move);
+          grab.removeEventListener('pointerup',finish);
+          grab.removeEventListener('pointercancel',finish);
+          prefs.canvasPositions[id]={x:parseFloat(node.style.getPropertyValue('--node-x')),y:parseFloat(node.style.getPropertyValue('--node-y'))};
+          save();
+          renderJobs();
+        };
+        grab.addEventListener('pointermove',move);
+        grab.addEventListener('pointerup',finish);
+        grab.addEventListener('pointercancel',finish);
+      };
+    });
+    if(previousScroll){el.scrollLeft=previousScroll.left;el.scrollTop=previousScroll.top}
+  }else{
+    el.innerHTML=matches.map(job=>`<article class="job"><div class="job-head"><div><b>${escapeHTML(job.label)}</b> <span class="meta">#${escapeHTML(job.id)}</span></div><div><span class="pill ${escapeHTML(job.status)}">${escapeHTML(job.status)}</span> ${job.status==='running'?`<button class="cancel" data-id="${escapeHTML(job.id)}">Stop</button>`:''}</div></div>${jobDetails(job)}</article>`).join('');
+  }
   el.querySelectorAll('.cancel').forEach(button=>button.onclick=async()=>{
     try{await window.pywebview.api.cancel_job(button.dataset.id);log('Cancellation requested: '+button.dataset.id)}
     catch(error){log('Error: '+(error.message||error))}
@@ -75,8 +179,8 @@ function setupMenus(){
   });
   $('monitor-options').innerHTML=Object.entries(monLabels).map(([k,v])=>`<label><input type="checkbox" data-monitor="${k}" ${prefs.monitors.includes(k)?'checked':''}>${escapeHTML(v)}</label>`).join('');
   document.querySelectorAll('[data-monitor]').forEach(c=>c.onchange=()=>{prefs.monitors=Array.from(document.querySelectorAll('[data-monitor]:checked')).map(x=>x.dataset.monitor);apply()});
-  $('layout-options').innerHTML=['connected','flow','layered','collapsed'].map(k=>`<label><input type="radio" name="layout" value="${k}" ${prefs.layout===k?'checked':''}>${k[0].toUpperCase()+k.slice(1)}</label>`).join('');
-  document.querySelectorAll('[name=layout]').forEach(c=>c.onchange=()=>{prefs.layout=c.value;apply()});
+  $('layout-options').innerHTML=['connected','flow','layered','collapsed','canvas'].map(k=>`<label><input type="radio" name="layout" value="${k}" ${prefs.layout===k?'checked':''}>${k[0].toUpperCase()+k.slice(1)}</label>`).join('');
+  document.querySelectorAll('[name=layout]').forEach(c=>c.onchange=()=>setLayout(c.value));
   $('theme').onchange=e=>{prefs.theme=e.target.value;apply()};
   $('history-count').oninput=e=>{prefs.historyCount=Number(e.target.value);apply()};
   $('opacity').oninput=e=>{prefs.opacity=Number(e.target.value);apply()};
@@ -106,7 +210,7 @@ async function command(line){
   log('> '+line);
   try{
     const [verb,...args]=parseCommandLine(line);
-    if(verb==='help')log('Commands: help, catalog [reload], run <command> [arguments...], list, layout connected|flow|layered|collapsed, stop <id>, clear');
+    if(verb==='help')log('Commands: help, catalog [reload], run <command> [arguments...], list, layout connected|flow|layered|collapsed|canvas, stop <id>, clear');
     else if(verb==='catalog'){
       if(args.length>1||(args.length===1&&args[0]!=='reload'))throw Error('Usage: catalog [reload]');
       if(args.includes('reload'))await refreshCatalog(true);
@@ -124,8 +228,8 @@ async function command(line){
       log('Cancellation requested');
     }else if(verb==='list')log(jobs.map(job=>job.id+':'+job.status).join(' | ')||'No jobs');
     else if(verb==='layout'){
-      if(!['connected','flow','layered','collapsed'].includes(args[0]))throw Error('Unknown layout');
-      prefs.layout=args[0];apply();log('Layout: '+args[0]);
+      if(!['connected','flow','layered','collapsed','canvas'].includes(args[0]))throw Error('Unknown layout');
+      setLayout(args[0]);log('Layout: '+args[0]);
     }else if(verb==='clear'){history=[];renderHistory()}
     else log('Unknown command. Type help.');
   }catch(error){log('Error: '+(error.message||error))}
@@ -148,6 +252,72 @@ async function refreshCatalog(reload=false){
   $('jobs').querySelector('.empty')?.replaceChildren(document.createTextNode('No executions yet. Select a script above or type run <command>.'));
 }
 const jobFilters=document.createElement('div');jobFilters.id='job-filters';jobFilters.innerHTML='<select id="job-status-filter" aria-label="Filter jobs by status"><option value="all">All statuses</option><option value="active">Active</option><option value="queued">Queued</option><option value="running">Running</option><option value="cancelling">Cancelling</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select><input id="job-search" type="search" aria-label="Search jobs" placeholder="Search jobs, output, and artifacts"><span id="job-filter-count" class="subtle" aria-live="polite">0 of 0 jobs</span>';document.querySelector('.workspace-head').after(jobFilters);$('job-status-filter').onchange=e=>{jobStatusFilter=e.target.value;renderJobs()};$('job-search').oninput=e=>{jobSearch=e.target.value.trim();renderJobs()};
+const canvasControls=document.createElement('div');
+canvasControls.id='canvas-controls';
+canvasControls.setAttribute('role','group');
+canvasControls.setAttribute('aria-label','Canvas controls');
+canvasControls.hidden=true;
+canvasControls.innerHTML='<button type="button" data-canvas-zoom="out" aria-label="Zoom out canvas">−</button><span id="canvas-zoom-label" aria-live="polite">100%</span><button type="button" data-canvas-zoom="in" aria-label="Zoom in canvas">+</button><button type="button" data-canvas-action="reset">Reset view</button><button type="button" data-canvas-action="arrange">Auto-arrange</button><span class="subtle">Drag nodes · Ctrl+scroll to zoom · Drag empty space to pan</span>';
+jobFilters.after(canvasControls);
+function setCanvasZoom(value){
+  const el=$('jobs');
+  const centerX=(el.scrollLeft+el.clientWidth/2)/prefs.canvasZoom;
+  const centerY=(el.scrollTop+el.clientHeight/2)/prefs.canvasZoom;
+  prefs.canvasZoom=Math.max(.5,Math.min(1.5,value));
+  renderJobs();
+  el.scrollLeft=Math.max(0,centerX*prefs.canvasZoom-el.clientWidth/2);
+  el.scrollTop=Math.max(0,centerY*prefs.canvasZoom-el.clientHeight/2);
+  save();
+}
+canvasControls.querySelector('[data-canvas-zoom=out]').onclick=()=>setCanvasZoom(prefs.canvasZoom-.1);
+canvasControls.querySelector('[data-canvas-zoom=in]').onclick=()=>setCanvasZoom(prefs.canvasZoom+.1);
+canvasControls.querySelector('[data-canvas-action=reset]').onclick=()=>{
+  prefs.canvasZoom=1;
+  renderJobs();
+  $('jobs').scrollTo({left:0,top:0});
+  save();
+};
+canvasControls.querySelector('[data-canvas-action=arrange]').onclick=()=>{
+  prefs.canvasPositions={};
+  canvasExpanded.clear();
+  renderJobs();
+  $('jobs').scrollTo({left:0,top:0});
+  save();
+};
+let canvasPan=null;
+const jobsViewport=$('jobs');
+function setLayout(layout){
+  canvasDragging=false;
+  canvasPan=null;
+  jobsViewport.classList.remove('panning');
+  prefs.layout=layout;
+  apply();
+}
+jobsViewport.addEventListener('pointerdown',event=>{
+  if(prefs.layout!=='canvas'||event.button!==0||event.target.closest('.canvas-node'))return;
+  canvasPan={pointerId:event.pointerId,x:event.clientX,y:event.clientY,left:jobsViewport.scrollLeft,top:jobsViewport.scrollTop};
+  jobsViewport.classList.add('panning');
+  jobsViewport.setPointerCapture(event.pointerId);
+});
+jobsViewport.addEventListener('pointermove',event=>{
+  if(!canvasPan||event.pointerId!==canvasPan.pointerId)return;
+  jobsViewport.scrollLeft=canvasPan.left-(event.clientX-canvasPan.x);
+  jobsViewport.scrollTop=canvasPan.top-(event.clientY-canvasPan.y);
+});
+function finishCanvasPan(event){
+  if(!canvasPan||event.pointerId!==canvasPan.pointerId)return;
+  canvasPan=null;
+  jobsViewport.classList.remove('panning');
+}
+jobsViewport.addEventListener('pointerup',finishCanvasPan);
+jobsViewport.addEventListener('pointercancel',finishCanvasPan);
+jobsViewport.addEventListener('wheel',event=>{
+  if(prefs.layout==='canvas'&&event.ctrlKey){
+    event.preventDefault();
+    setCanvasZoom(prefs.canvasZoom+(event.deltaY<0?.05:-.05));
+  }
+},{passive:false});
+window.addEventListener('resize',()=>{if(prefs.layout==='canvas'&&!canvasDragging)renderJobs()});
 const scriptSelect=document.createElement('select');scriptSelect.id='run-script';scriptSelect.disabled=true;scriptSelect.setAttribute('aria-label','Select an approved script');const runControls=document.createElement('div');runControls.className='run-controls';runControls.append(scriptSelect,$('run-demo'));document.querySelector('.workspace-head').append(runControls);const catalogDescription=document.createElement('span');catalogDescription.id='catalog-description';catalogDescription.className='subtle';document.querySelector('.workspace-head').firstElementChild.append(catalogDescription);$('run-demo').textContent='▶ Run selected';$('command').setAttribute('aria-label','Command terminal');$('command').title='Enter runs a command. Shift+Enter inserts a new line. Use Up and Down to browse command history.';document.querySelector('.hint').textContent='Enter run · Shift+Enter newline';
 $('command').addEventListener('input',e=>{e.target.style.height='29px';e.target.style.height=Math.min(e.target.scrollHeight,180)+'px'});
 $('command').addEventListener('keydown',e=>{
@@ -187,7 +357,7 @@ $('command').addEventListener('keydown',e=>{
 });
 $('run-demo').onclick=()=>bridgeReady&&scriptSelect.value?command('run '+scriptSelect.value):log(bridgeReady?'No runnable scripts found. Add ACW metadata to a script.':'Launch with python main.py');
 function refreshClock(){$('clock').textContent=new Date().toLocaleString()};refreshClock();setInterval(refreshClock,1000);setupMenus();apply();
-async function poll(){if(!bridgeReady||busy)return;busy=true;try{jobs=await window.pywebview.api.jobs();renderJobs();if(!jobs.length)$('jobs').querySelector('.empty').textContent='No executions yet. Select a script above or type run <command>.';$('connection').textContent=`Local Python connected · ${jobs.filter(j=>j.status==='running').length} running · ${jobs.length} total` }catch(e){$('connection').textContent='Bridge error: '+e}finally{busy=false}}
+async function poll(){if(!bridgeReady||busy)return;busy=true;try{jobs=await window.pywebview.api.jobs();if(!(prefs.layout==='canvas'&&canvasDragging))renderJobs();if(!jobs.length)$('jobs').querySelector('.empty').textContent='No executions yet. Select a script above or type run <command>.';$('connection').textContent=`Local Python connected · ${jobs.filter(j=>j.status==='running').length} running · ${jobs.length} total` }catch(e){$('connection').textContent='Bridge error: '+e}finally{busy=false}}
 window.addEventListener('pywebviewready',()=>{bridgeReady=true;log('Python bridge connected');refreshCatalog().catch(e=>log('Catalog error: '+(e.message||e)));poll();setInterval(poll,850)});
 setTimeout(()=>{if(!bridgeReady)$('connection').textContent='Open this file through python main.py (not a regular browser tab)'},2500);
 
@@ -202,11 +372,51 @@ backgroundStyle.textContent=`
   #job-filters{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 14px;padding:11px 14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
   #job-filters input{flex:1;min-width:180px;background:#0b1b27;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px}
   #job-filter-count{margin-left:auto}
+  #canvas-controls{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin:0 0 12px}
+  #canvas-controls[hidden]{display:none}
+  #canvas-controls button{padding:5px 10px}
+  #canvas-zoom-label{min-width:42px;text-align:center;color:var(--muted);font:12px monospace}
+  .jobs.canvas{display:block;position:relative;height:70vh;min-height:440px;max-height:calc(100vh - 300px);overflow:auto;overscroll-behavior:contain;border:1px solid var(--border);border-radius:var(--radius);background-color:color-mix(in srgb,var(--bg) 84%,transparent);background-image:linear-gradient(color-mix(in srgb,var(--accent) 8%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--accent) 8%,transparent) 1px,transparent 1px),radial-gradient(ellipse at 50% 30%,color-mix(in srgb,var(--accent) 8%,transparent),transparent 70%);background-size:32px 32px,32px 32px,100% 100%}
+  .jobs.canvas.panning{cursor:grabbing;user-select:none}
+  .canvas-world{position:relative}
+  .canvas-nodes{position:absolute;left:0;top:0;transform-origin:top left}
+  .canvas-node{position:absolute;left:var(--node-x);top:var(--node-y);width:278px;margin:0;padding:0;overflow:hidden;transition:border-color .2s,box-shadow .2s;box-shadow:0 12px 32px #0007}
+  .canvas-node.running{--node-color:#4ee6ef;border-color:color-mix(in srgb,var(--node-color) 70%,transparent);box-shadow:0 0 22px color-mix(in srgb,var(--node-color) 30%,transparent),0 12px 32px #0007;animation:canvas-pulse 2.4s ease-in-out infinite}
+  .canvas-node.queued{--node-color:#ffc36c}
+  .canvas-node.completed{--node-color:#72e0b4}
+  .canvas-node.failed{--node-color:#ff838e}
+  .canvas-node.cancelled,.canvas-node.cancelling{--node-color:#bca3ff}
+  .canvas-node:not(.running){border-color:color-mix(in srgb,var(--node-color) 52%,transparent)}
+  @keyframes canvas-pulse{50%{box-shadow:0 0 30px color-mix(in srgb,var(--node-color) 42%,transparent),0 12px 32px #0007}}
+  @media(prefers-reduced-motion:reduce){.canvas-node.running{animation:none}}
+  .canvas-node-head{padding:11px 12px;background:color-mix(in srgb,var(--surface) 90%,#000 10%)}
+  .canvas-node-grab{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:grab}
+  .canvas-node-grab:active{cursor:grabbing}
+  .canvas-node-grab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .canvas-expand{display:flex;align-items:center;gap:10px;min-width:0;padding:0;border:0;background:transparent;text-align:left}
+  .canvas-expand:hover{border-color:transparent}
+  .progress-ring{display:block;flex:0 0 36px;width:36px;height:36px;border-radius:50%;background:conic-gradient(var(--node-color) var(--progress-angle),#28414d 0);position:relative}
+  .progress-ring:after{content:'';position:absolute;inset:4px;border-radius:50%;background:#0b1a24}
+  .canvas-node-copy{display:flex;flex-direction:column;min-width:0;gap:2px}
+  .canvas-node-copy b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+  .canvas-stage{max-width:165px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px}
+  .canvas-node-status{color:var(--node-color);font-size:10px;text-transform:uppercase}
+  .canvas-node-actions{display:flex;align-items:center;justify-content:space-between;margin:5px 0 0 46px}
+  .canvas-node-actions button{padding:2px 7px;font-size:11px}
+  .canvas-node .meta{color:var(--muted);font:10px monospace}
+  .canvas-node .panels{display:none}
+  .canvas-node.expanded{width:min(860px,calc(100vw - 100px));z-index:5;box-shadow:0 22px 65px #000b}
+  .canvas-node.expanded{background:var(--bg)}
+  .jobs.canvas.has-expanded .canvas-node:not(.expanded){opacity:.24}
+  .canvas-node.expanded .panels{display:grid;padding:12px}
+  .canvas-node.expanded .panels{gap:14px}
+  .canvas-node.expanded .pane{padding:12px;min-height:120px}
   .artifact-list{margin-top:12px}.artifact-list h4{margin:0 0 6px;color:var(--accent);font-size:11px;letter-spacing:.1em}
   .artifact-row{display:flex;align-items:center;gap:5px;padding:4px 0;border-bottom:1px solid #ffffff0c}
   .artifact-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:11px ui-monospace,Consolas,monospace}
   .artifact-row button{padding:3px 7px;font-size:11px}
-  @media(max-width:600px){.workspace-head{align-items:flex-start;flex-wrap:wrap}.run-controls{width:100%}.run-controls select{flex:1;min-width:0}}
+  @media(max-width:900px){.canvas-node.expanded{width:min(620px,calc(100vw - 55px))}}
+  @media(max-width:600px){.workspace-head{align-items:flex-start;flex-wrap:wrap}.run-controls{width:100%}.run-controls select{flex:1;min-width:0}.jobs.canvas{height:65vh;min-height:360px;max-height:none}}
   @media(max-width:600px){#job-filters input{min-width:100%}#job-filter-count{margin-left:0}}
 `;
 document.head.append(backgroundStyle);
