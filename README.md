@@ -52,9 +52,7 @@ This opens a desktop window. **Opening `ui/index.html` directly in Chrome or Edg
 ```text
 help
 catalog
-run demo
-run quality
-run organize
+run <command>
 list
 layout connected
 layout flow
@@ -64,9 +62,9 @@ stop <job-id>
 clear
 ```
 
-`run demo` and `run quality` start real local example Python processes. Their workload and quality scores are illustrative, but their runtime, process CPU, and process memory readings are real measurements when `psutil` is available. CPU sampling is approximate. "System memory" is not currently collected and is labeled accordingly in the UI.
+Scripts in the catalog are discovered when the app starts. The UI loads their commands and descriptions from the script metadata and offers a selector to launch them. For example, `run organize` starts the Downloads organizer. Its default target is `~/Downloads`; to run it directly, use `python scripts/organize_downloads.py`, pass `--target <folder>` to select another folder, or use `--dry-run` to preview moves.
 
-`run organize` sorts supported files in `~/Downloads` into `Images`, `Documents`, `Installers`, and `Archives` folders. Files with other extensions are left in place, and name collisions are resolved by adding a number to the destination filename. To run it directly, use `python scripts/organize_downloads.py`; pass `--target <folder>` to select another folder or `--dry-run` to preview moves.
+`run demo` and `run quality` start illustrative local example workflows. Job runtime, process CPU, and process memory readings are real measurements when `psutil` is available. CPU sampling is approximate. "System memory" is not currently collected and is labeled accordingly in the UI.
 
 ## Project structure
 
@@ -79,6 +77,7 @@ acw-local/
 ├── acw/
 │   ├── __init__.py
 │   ├── api.py                # Exposed bridge methods
+├── methods/
 │   └── engine.py             # Job registry, subprocesses, telemetry
 ├── ui/
 │   └── index.html            # All-in-one HTML/CSS/JS frontend
@@ -91,11 +90,17 @@ acw-local/
 
 ## Adding scripts
 
-1. Place a trusted Python script inside `scripts/`.
-2. Add a corresponding **explicit** entry to `Engine.registry` in `acw/engine.py`.
-3. Restart the app and launch it using `run <registered-name>`.
+Place a trusted `.py` script in `scripts/` and add these comments near the top (within the first 20 lines):
 
-This prototype deliberately does **not** accept arbitrary shell commands, unvalidated paths, or browser-supplied command arguments. The process runner uses `shell=False` and an explicit registry. Only register scripts you trust: they execute with your user account's privileges.
+```python
+# ACW_COMMAND: my-command
+# ACW_DESCRIPTION: Short explanation shown in the catalog
+# ACW_LABEL: Optional friendly name shown in the UI
+```
+
+`ACW_COMMAND` and `ACW_DESCRIPTION` are required; `ACW_LABEL` is optional and defaults to a title-cased command. Commands use lowercase letters, numbers, and hyphens, and must be unique. Restart the app to discover newly added scripts, then run one using `run my-command` or select it in the UI. Scripts without ACW metadata are not exposed. The catalog is read once when the app starts; the scripts folder is not monitored.
+
+The process runner uses `shell=False` and only launches scripts discovered in the `scripts/` folder. Only add scripts you trust: they execute with your user account's privileges.
 
 ### Optional structured progress events
 
@@ -109,6 +114,8 @@ print('ACW_EVENT:' + json.dumps({
 ```
 
 Any other stdout line is treated as ordinary process output. The engine retains up to 250 output lines and 250 events per job in memory. A maximum of 100 recent job records is kept in memory. Completed jobs are written to `runs/<job-id>.json` (ignored by Git).
+
+Scripts may emit progress updates while they run; when a script exits successfully, the engine marks its stage as `Complete` and progress as 100%.
 
 ## Architecture and limitations
 

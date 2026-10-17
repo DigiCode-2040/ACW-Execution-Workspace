@@ -1,3 +1,6 @@
+# ACW_COMMAND: demo
+# ACW_LABEL: Demo Pipeline
+# ACW_DESCRIPTION: Instrumented example workflow
 import json
 import time
 

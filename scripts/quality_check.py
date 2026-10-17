@@ -1,3 +1,6 @@
+# ACW_COMMAND: quality
+# ACW_LABEL: Quality Check
+# ACW_DESCRIPTION: Illustrative validation task
 import json
 import time
 for stage, pct in [('Discover', 20), ('Test', 60), ('Report', 100)]:

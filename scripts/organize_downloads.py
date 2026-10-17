@@ -1,5 +1,9 @@
+# ACW_COMMAND: organize
+# ACW_LABEL: Organize Downloads
+# ACW_DESCRIPTION: Sort files in ~/Downloads by type
 """Sort files in the Downloads folder into folders by file type."""
 import argparse
+import json
 from pathlib import Path
 import shutil
 
@@ -10,6 +14,13 @@ EXTENSIONS = {
     "Installers": {".exe", ".msi"},
     "Archives": {".zip", ".rar", ".7z"},
 }
+
+
+def emit_progress(stage: str, progress: int) -> None:
+    print(
+        "ACW_EVENT:" + json.dumps({"stage": stage, "progress": progress}),
+        flush=True,
+    )
 
 
 def available_destination(folder: Path, filename: str) -> Path:
@@ -30,33 +41,34 @@ def organize(target_folder: Path, dry_run: bool = False) -> int:
     if not target_folder.is_dir():
         raise NotADirectoryError(f"Target folder does not exist or is not a directory: {target_folder}")
 
+    emit_progress("Scanning files", 5)
+    files = [
+        (source, category)
+        for source in target_folder.iterdir()
+        if source.is_file()
+        for category, extensions in EXTENSIONS.items()
+        if source.suffix.lower() in extensions
+    ]
+
     moved = 0
-    for source in target_folder.iterdir():
-        if not source.is_file():
-            continue
-
-        category = next(
-            (name for name, extensions in EXTENSIONS.items() if source.suffix.lower() in extensions),
-            None,
-        )
-        if category is None:
-            continue
-
+    for index, (source, category) in enumerate(files, start=1):
         category_folder = target_folder / category
         destination = available_destination(category_folder, source.name)
         if dry_run:
             print(f"Would move: {source.name} -> {category}/{destination.name}")
             moved += 1
-            continue
-
-        category_folder.mkdir(exist_ok=True)
-        destination = available_destination(category_folder, source.name)
-        shutil.move(str(source), str(destination))
-        print(f"Moved: {source.name} -> {category}/{destination.name}")
-        moved += 1
+        else:
+            category_folder.mkdir(exist_ok=True)
+            destination = available_destination(category_folder, source.name)
+            shutil.move(str(source), str(destination))
+            print(f"Moved: {source.name} -> {category}/{destination.name}")
+            moved += 1
+        progress = min(99, 5 + round(90 * index / len(files)))
+        emit_progress("Organizing files", progress)
 
     action = "Would organize" if dry_run else "Organized"
     print(f"{action} {moved} file(s) in {target_folder}")
+    emit_progress("Complete", 100)
     return moved
 
 

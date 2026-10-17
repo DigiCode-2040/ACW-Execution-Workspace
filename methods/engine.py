@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import threading
@@ -22,6 +23,8 @@ RUN_DIR = ROOT / 'runs'
 MAX_CONCURRENT = 4
 MAX_LINES = 250
 MAX_RUNS = 100
+METADATA_LINES = 20
+COMMAND_PATTERN = re.compile(r'^[a-z][a-z0-9-]*$')
 
 def stamp():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
@@ -31,12 +34,40 @@ class Engine:
         self.lock = threading.RLock()
         self.jobs = {}
         self.processes = {}
-        self.registry = {
-            'demo': {'label': 'Demo Pipeline', 'path': SCRIPT_DIR / 'demo_pipeline.py', 'description': 'Instrumented example workflow'},
-            'quality': {'label': 'Quality Check', 'path': SCRIPT_DIR / 'quality_check.py', 'description': 'Illustrative validation task'},
-            'organize': {'label': 'Organize Downloads', 'path': SCRIPT_DIR / 'organize_downloads.py', 'description': 'Sort files in ~/Downloads by type'},
-        }
+        self.registry = self._discover_scripts()
         RUN_DIR.mkdir(exist_ok=True)
+
+    def _discover_scripts(self):
+        registry = {}
+        script_dir = SCRIPT_DIR.resolve()
+        for path in sorted(SCRIPT_DIR.glob('*.py')):
+            resolved = path.resolve()
+            if resolved.parent != script_dir:
+                continue
+            lines = path.read_text(encoding='utf-8').splitlines()[:METADATA_LINES]
+            metadata = {}
+            for line in lines:
+                match = re.match(r'^\s*#\s*ACW_(COMMAND|DESCRIPTION|LABEL):\s*(.*?)\s*$', line)
+                if match:
+                    metadata[match.group(1).lower()] = match.group(2)
+            if not metadata:
+                continue
+            if not metadata.get('command') or not metadata.get('description'):
+                raise ValueError(f'{path.name} must define ACW_COMMAND and ACW_DESCRIPTION in its first {METADATA_LINES} lines.')
+
+            name = metadata['command']
+            if not COMMAND_PATTERN.fullmatch(name):
+                raise ValueError(f'{path.name} has invalid ACW_COMMAND {name!r}; use lowercase letters, numbers, and hyphens.')
+            if name in registry:
+                raise ValueError(f'Duplicate ACW_COMMAND {name!r} in {path.name} and {registry[name]["path"].name}.')
+
+            label = metadata.get('label') or name.replace('-', ' ').title()
+            registry[name] = {
+                'label': label,
+                'path': resolved,
+                'description': metadata['description'],
+            }
+        return registry
 
     def catalog(self):
         return [{'name': name, 'label': item['label'], 'description': item['description']} for name, item in self.registry.items()]
@@ -114,6 +145,10 @@ class Engine:
                 job['exit_code'] = proc.returncode
                 job['ended'] = stamp()
                 job['status'] = 'cancelled' if job['status'] == 'cancelling' else ('completed' if proc.returncode == 0 else 'failed')
+                if job['status'] == 'completed':
+                    job['stage'] = 'Complete'
+                    job['progress'] = 100
+                    self._event(job, 'stage', 'Complete')
                 self._event(job, job['status'], f'Process exited with code {proc.returncode}')
                 self._save(job)
         except Exception as exc:
