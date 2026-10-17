@@ -54,6 +54,7 @@ help
 catalog
 run demo
 run quality
+run organize
 list
 layout connected
 layout flow
@@ -64,6 +65,8 @@ clear
 ```
 
 `run demo` and `run quality` start real local example Python processes. Their workload and quality scores are illustrative, but their runtime, process CPU, and process memory readings are real measurements when `psutil` is available. CPU sampling is approximate. "System memory" is not currently collected and is labeled accordingly in the UI.
+
+`run organize` sorts supported files in `~/Downloads` into `Images`, `Documents`, `Installers`, and `Archives` folders. Files with other extensions are left in place, and name collisions are resolved by adding a number to the destination filename. To run it directly, use `python scripts/organize_downloads.py`; pass `--target <folder>` to select another folder or `--dry-run` to preview moves.
 
 ## Project structure
 
@@ -81,7 +84,8 @@ acw-local/
 │   └── index.html            # All-in-one HTML/CSS/JS frontend
 ├── scripts/
 │   ├── demo_pipeline.py
-│   └── quality_check.py
+│   ├── quality_check.py
+│   └── organize_downloads.py
 └── screenshots/              # Add UI captures here
 ```
 

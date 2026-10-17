@@ -22,4 +22,73 @@ function refreshClock(){$('clock').textContent=new Date().toLocaleString()};refr
 async function poll(){if(!bridgeReady||busy)return;busy=true;try{jobs=await window.pywebview.api.jobs();renderJobs();$('connection').textContent=`Local Python connected · ${jobs.filter(j=>j.status==='running').length} running · ${jobs.length} total` }catch(e){$('connection').textContent='Bridge error: '+e}finally{busy=false}}
 window.addEventListener('pywebviewready',()=>{bridgeReady=true;log('Python bridge connected');poll();setInterval(poll,850)});
 setTimeout(()=>{if(!bridgeReady)$('connection').textContent='Open this file through python main.py (not a regular browser tab)'},2500);
+</script><script>
+const backgroundStyle=document.createElement('style');
+backgroundStyle.textContent=`
+  #ambient-background{position:fixed;inset:0;z-index:0;width:100%;height:100%;pointer-events:none}
+  body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;background-image:linear-gradient(color-mix(in srgb,var(--accent) 4.5%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--accent) 4.5%,transparent) 1px,transparent 1px);background-size:32px 32px}
+  body>header,body>main{position:relative;z-index:1}
+`;
+document.head.append(backgroundStyle);
+
+const ambientCanvas=document.createElement('canvas');
+ambientCanvas.id='ambient-background';
+ambientCanvas.setAttribute('aria-hidden','true');
+document.body.prepend(ambientCanvas);
+const ambientContext=ambientCanvas.getContext('2d');
+if(!ambientContext)throw new Error('Unable to initialize the ambient background canvas');
+
+const reducedMotion=window.matchMedia('(prefers-reduced-motion: reduce)');
+let ambientParticles=[],ambientWidth=0,ambientHeight=0,ambientFrame=0,ambientRequest=0;
+function resizeAmbient(){
+  const pixelRatio=Math.min(window.devicePixelRatio||1,2);
+  ambientWidth=window.innerWidth;
+  ambientHeight=window.innerHeight;
+  ambientCanvas.width=Math.round(ambientWidth*pixelRatio);
+  ambientCanvas.height=Math.round(ambientHeight*pixelRatio);
+  ambientContext.setTransform(pixelRatio,0,0,pixelRatio,0,0);
+  ambientParticles=Array.from({length:Math.min(55,Math.floor(ambientWidth*ambientHeight/23000))},()=>({
+    x:Math.random()*ambientWidth,
+    y:Math.random()*ambientHeight,
+    radius:.5+Math.random()*1.1,
+    speed:.08+Math.random()*.27
+  }));
+}
+function drawAmbient(){
+  ambientRequest=0;
+  if(reducedMotion.matches||document.hidden){
+    ambientContext.clearRect(0,0,ambientWidth,ambientHeight);
+    return;
+  }
+  ambientRequest=requestAnimationFrame(drawAmbient);
+  if(++ambientFrame%2)return;
+  ambientContext.clearRect(0,0,ambientWidth,ambientHeight);
+  ambientContext.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  ambientContext.globalAlpha=.25;
+  for(const particle of ambientParticles){
+    particle.y-=particle.speed;
+    if(particle.y<0){
+      particle.y=ambientHeight;
+      particle.x=Math.random()*ambientWidth;
+    }
+    ambientContext.beginPath();
+    ambientContext.arc(particle.x,particle.y,particle.radius,0,Math.PI*2);
+    ambientContext.fill();
+  }
+  ambientContext.globalAlpha=1;
+}
+function syncAmbient(){
+  if(reducedMotion.matches||document.hidden){
+    if(ambientRequest)cancelAnimationFrame(ambientRequest);
+    ambientRequest=0;
+    ambientContext.clearRect(0,0,ambientWidth,ambientHeight);
+  }else if(!ambientRequest){
+    ambientRequest=requestAnimationFrame(drawAmbient);
+  }
+}
+window.addEventListener('resize',resizeAmbient);
+document.addEventListener('visibilitychange',syncAmbient);
+reducedMotion.addEventListener('change',syncAmbient);
+resizeAmbient();
+syncAmbient();
 </script></body></html>

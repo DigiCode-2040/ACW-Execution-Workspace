@@ -34,6 +34,7 @@ class Engine:
         self.registry = {
             'demo': {'label': 'Demo Pipeline', 'path': SCRIPT_DIR / 'demo_pipeline.py', 'description': 'Instrumented example workflow'},
             'quality': {'label': 'Quality Check', 'path': SCRIPT_DIR / 'quality_check.py', 'description': 'Illustrative validation task'},
+            'organize': {'label': 'Organize Downloads', 'path': SCRIPT_DIR / 'organize_downloads.py', 'description': 'Sort files in ~/Downloads by type'},
         }
         RUN_DIR.mkdir(exist_ok=True)
 
