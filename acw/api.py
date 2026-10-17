@@ -7,8 +7,11 @@ class API:
 
     def catalog(self): return self.engine.catalog()
     def jobs(self): return self.engine.snapshot()
-    def start_job(self, name): return self.engine.start(name)
+    def start_job(self, name, arguments=None): return self.engine.start(name, arguments)
+    def reload_catalog(self): return self.engine.reload_catalog()
     def cancel_job(self, job_id): return self.engine.cancel(job_id)
+    def open_artifact(self, job_id, artifact): return self.engine.open_artifact(job_id, artifact)
+    def reveal_artifact(self, job_id, artifact): return self.engine.reveal_artifact(job_id, artifact)
 
     def exit_app(self):
         import webview
