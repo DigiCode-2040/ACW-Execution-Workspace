@@ -20,10 +20,10 @@ A **local-only, command-first execution workspace** for launching approved Pytho
 - Expandable terminal (`Enter` executes; `Shift+Enter` inserts a newline)
 - Configurable recent action history (1–20 lines)
 - Job status filters and search across job details, output, events, and artifacts
-- At-a-glance status cues across layouts: pulsing running jobs, green completed checks, red failures, and muted queued/cancelling states
+- At-a-glance status cues across layouts: pulsing running jobs, green completed checks, neutral gray failures, and muted queued/cancelling states
 - Real asynchronous Python subprocess execution, with a controlled script catalog
 - Runtime catalog reload and argument passing to discovered scripts
-- Script selector beside Run Selected, plus Exit App in Preferences
+- Script selector beside Run Selected, icon controls to reload scripts or open the selected script for editing, plus Exit App in Preferences
 - Task → Working Parts → Output flow, with a discreet per-job notes button that opens a fourth Notes panel when needed
 - Toggleable Workspace Note for session-wide focus and reminders
 - Collapsed dashboard with live job totals, compact progress rows, expandable four-panel job details, and a recent-events sidebar
@@ -85,7 +85,7 @@ Collapsed dashboard shows live running, completed, failed, and active totals abo
 
 Per-job notes are saved by job ID and the Workspace Note is saved separately in the webview's local storage. Enable or hide the global Workspace Note from Preferences; its content is preserved when hidden. These notes stay on the local machine and are not included in execution snapshots.
 
-Scripts in the catalog are discovered when the app starts. Use `catalog reload` to rescan the `scripts/` folder while the app is running; invalid metadata is reported and leaves the existing catalog unchanged. For example, `run organize --target "C:\Users\you\Downloads Archive" --dry-run` passes the remaining tokens as arguments to the organizer script. Single- or double-quoted values preserve spaces. The Run Selected button launches the selected script without arguments.
+Scripts in the catalog are discovered when the app starts. After saving, adding, or removing a script, hover over the reload icon beside the script selector or enter `catalog reload` to rescan the `scripts/` folder; invalid metadata is reported and leaves the existing catalog unchanged. Use the adjacent edit icon to open the selected script in a text editor. For example, `run organize --target "C:\Users\you\Downloads Archive" --dry-run` passes the remaining tokens as arguments to the organizer script. Single- or double-quoted values preserve spaces. The Run Selected button launches the selected script without arguments.
 
 Arguments are passed as a list directly to the approved Python script; ACW does not invoke a shell. Each script decides which arguments it accepts. For example, the organizer's default target is `~/Downloads`; it accepts `--target <folder>` and `--dry-run`.
 
@@ -103,7 +103,6 @@ acw-local/
 ├── acw/
 │   ├── __init__.py
 │   ├── api.py                # Exposed bridge methods
-├── methods/
 │   └── engine.py             # Job registry, subprocesses, telemetry
 ├── ui/
 │   ├── index.html            # HTML and CSS frontend

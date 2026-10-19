@@ -361,11 +361,11 @@ async function refreshCatalog(reload=false){
     return option;
   }));
   if(catalogEntries.some(entry=>entry.name===previousSelection))select.value=previousSelection;
-  select.disabled=!catalogEntries.length;$('run-demo').disabled=!catalogEntries.length;
+  select.disabled=!catalogEntries.length;$('run-demo').disabled=!catalogEntries.length;$('edit-script').disabled=!select.value;
   $('command').placeholder=catalogEntries.length?`help · catalog reload · run ${catalogEntries[0].name} · list`:'No runnable scripts found';
   const selected=catalogEntries.find(entry=>entry.name===select.value);
   $('catalog-description').textContent=selected?.description||'Add scripts with ACW metadata to the scripts folder';
-  select.onchange=()=>{$('catalog-description').textContent=catalogEntries.find(entry=>entry.name===select.value)?.description||''};
+  select.onchange=()=>{$('catalog-description').textContent=catalogEntries.find(entry=>entry.name===select.value)?.description||'';$('edit-script').disabled=!select.value};
   $('jobs').querySelector('.empty')?.replaceChildren(document.createTextNode('No executions yet. Select a script above or type run <command>.'));
 }
 const jobFilters=document.createElement('div');jobFilters.id='job-filters';jobFilters.innerHTML='<strong class="jobs-title">JOBS</strong><select id="job-status-filter" aria-label="Filter jobs by status"><option value="all">All statuses</option><option value="active">Active</option><option value="queued">Queued</option><option value="running">Running</option><option value="cancelling">Cancelling</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select><input id="job-search" type="search" aria-label="Search jobs" placeholder="Search jobs, output, and artifacts"><span id="job-filter-count" class="subtle" aria-live="polite">0 of 0 jobs</span>';document.querySelector('.workspace-head').after(jobFilters);$('job-status-filter').onchange=e=>{jobStatusFilter=e.target.value;renderJobs()};$('job-search').oninput=e=>{jobSearch=e.target.value.trim();renderJobs()};
@@ -373,7 +373,7 @@ const connectedSummary=document.createElement('section');
 connectedSummary.id='connected-summary';
 connectedSummary.className='connected-summary';
 connectedSummary.setAttribute('aria-label','Job totals');
-connectedSummary.innerHTML='<button class="total-card total-running" type="button" data-total="running" aria-pressed="false"><span class="total-icon" aria-hidden="true">●</span><span class="total-label">RUNNING</span><b class="total-value">0</b><small class="total-caption">jobs</small></button><button class="total-card total-completed" type="button" data-total="completed" aria-pressed="false"><span class="total-icon" aria-hidden="true">✓</span><span class="total-label">COMPLETED</span><b class="total-value">0</b><small class="total-caption">jobs</small></button><button class="total-card total-failed" type="button" data-total="failed" aria-pressed="false"><span class="total-icon" aria-hidden="true">!</span><span class="total-label">FAILED</span><b class="total-value">0</b><small class="total-caption">jobs</small></button><button class="total-card total-active" type="button" data-total="active" aria-pressed="false"><span class="total-icon" aria-hidden="true">⌁</span><span class="total-label">ACTIVE JOBS</span><b class="total-value">0</b><small class="total-caption">of 0 total jobs</small></button>';
+connectedSummary.innerHTML='<button class="total-card total-active" type="button" data-total="active" aria-pressed="false"><span class="total-icon" aria-hidden="true">⌁</span><span class="total-label">ACTIVE JOBS</span><b class="total-value">0</b><small class="total-caption">of 0 total jobs</small></button><button class="total-card total-running" type="button" data-total="running" aria-pressed="false"><span class="total-icon" aria-hidden="true">●</span><span class="total-label">RUNNING</span><b class="total-value">0</b><small class="total-caption">jobs</small></button><button class="total-card total-completed" type="button" data-total="completed" aria-pressed="false"><span class="total-icon" aria-hidden="true">✓</span><span class="total-label">COMPLETED</span><b class="total-value">0</b><small class="total-caption">jobs</small></button><button class="total-card total-failed" type="button" data-total="failed" aria-pressed="false"><span class="total-icon" aria-hidden="true">!</span><span class="total-label">FAILED</span><b class="total-value">0</b><small class="total-caption">jobs</small></button>';
 const connectedDashboard=document.createElement('div');
 connectedDashboard.id='connected-dashboard';
 connectedDashboard.className='connected-dashboard';
@@ -463,7 +463,7 @@ jobsViewport.addEventListener('wheel',event=>{
   }
 },{passive:false});
 window.addEventListener('resize',()=>{if(prefs.layout==='canvas'&&!canvasDragging)renderJobs()});
-const scriptSelect=document.createElement('select');scriptSelect.id='run-script';scriptSelect.disabled=true;scriptSelect.setAttribute('aria-label','Select an approved script');const runControls=document.createElement('div');runControls.className='run-controls';runControls.append(scriptSelect,$('run-demo'));document.querySelector('.workspace-head').append(runControls);const catalogDescription=document.createElement('span');catalogDescription.id='catalog-description';catalogDescription.className='subtle';document.querySelector('.workspace-head').firstElementChild.append(catalogDescription);$('run-demo').textContent='▶ Run selected';$('command').setAttribute('aria-label','Command terminal');$('command').title='Enter runs a command. Shift+Enter inserts a new line. Use Up and Down to browse command history.';document.querySelector('.hint').textContent='Enter run · Shift+Enter newline';
+const scriptSelect=document.createElement('select');scriptSelect.id='run-script';scriptSelect.disabled=true;scriptSelect.setAttribute('aria-label','Select an approved script');const reloadCatalogButton=document.createElement('button');reloadCatalogButton.type='button';reloadCatalogButton.id='reload-catalog';reloadCatalogButton.className='catalog-icon-button';reloadCatalogButton.textContent='↻';reloadCatalogButton.title='Reload scripts from the scripts folder';reloadCatalogButton.setAttribute('aria-label','Reload script catalog');reloadCatalogButton.onclick=async()=>{reloadCatalogButton.disabled=true;try{await command('catalog reload')}finally{reloadCatalogButton.disabled=false}};const editScriptButton=document.createElement('button');editScriptButton.type='button';editScriptButton.id='edit-script';editScriptButton.className='catalog-icon-button';editScriptButton.textContent='✎';editScriptButton.title='Open selected script for editing';editScriptButton.setAttribute('aria-label','Edit selected script');editScriptButton.disabled=true;editScriptButton.onclick=async()=>{if(!scriptSelect.value)return;editScriptButton.disabled=true;try{await window.pywebview.api.edit_script(scriptSelect.value);log('Opened script for editing: '+scriptSelect.value)}catch(error){log('Unable to open script for editing: '+(error.message||error))}finally{editScriptButton.disabled=!scriptSelect.value}};const runControls=document.createElement('div');runControls.className='run-controls';runControls.append(scriptSelect,$('run-demo'),reloadCatalogButton,editScriptButton);document.querySelector('.workspace-head').append(runControls);const catalogDescription=document.createElement('span');catalogDescription.id='catalog-description';catalogDescription.className='subtle';document.querySelector('.workspace-head').firstElementChild.append(catalogDescription);$('run-demo').textContent='▶ Run selected';$('command').setAttribute('aria-label','Command terminal');$('command').title='Enter runs a command. Shift+Enter inserts a new line. Use Up and Down to browse command history.';document.querySelector('.hint').textContent='Enter run · Shift+Enter newline';
 $('command').addEventListener('input',e=>{e.target.style.height='29px';e.target.style.height=Math.min(e.target.scrollHeight,180)+'px'});
 $('command').addEventListener('keydown',e=>{
   const input=e.target;
@@ -508,7 +508,7 @@ setTimeout(()=>{if(!bridgeReady)$('connection').textContent='Open this file thro
 
 const backgroundStyle=document.createElement('style');
 backgroundStyle.textContent=`
-  :root{--logo-size:80px;--logo-cyan:#22d3ee}
+  :root{--logo-size:80px;--logo-cyan:#22d3ee;--failed-color:#8997a1}
   header{height:auto;min-height:56px;padding:6px 22px}
   #ambient-background{position:fixed;inset:0;z-index:0;width:100%;height:100%;pointer-events:none}
   body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;background-image:linear-gradient(color-mix(in srgb,var(--accent) 4.5%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--accent) 4.5%,transparent) 1px,transparent 1px);background-size:32px 32px}
@@ -521,18 +521,21 @@ backgroundStyle.textContent=`
   .brand-copy small{margin-top:4px;color:var(--muted);font-size:8px;letter-spacing:.11em;white-space:nowrap}
   .run-controls{display:flex;align-items:center;gap:8px;margin-left:auto}
   .run-controls select{min-width:190px;max-width:320px}
+  .catalog-icon-button{width:34px;height:34px;padding:4px;font-size:18px;line-height:1}
+  .catalog-icon-button:disabled{opacity:.45;cursor:not-allowed}
   #connected-summary{display:none}
   #connected-dashboard{display:contents}
   .live-events{display:none}
-  .connected-layout #connected-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0 0 12px}
-  .total-card{display:grid;grid-template-columns:26px 1fr;grid-template-rows:auto 1fr auto;align-items:center;column-gap:8px;min-width:0;min-height:116px;padding:12px 15px;text-align:left;border-radius:12px;background:linear-gradient(145deg,color-mix(in srgb,var(--status-color) 8%,transparent),transparent 75%),#0c1c2ac9;border-color:color-mix(in srgb,var(--status-color) 27%,transparent);transition:border-color .18s,box-shadow .18s,transform .18s}
+  .connected-layout #connected-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0 0 12px}
+  .total-card{display:grid;grid-template-columns:26px minmax(0,1fr) auto;grid-template-rows:auto auto;align-items:center;column-gap:8px;min-width:0;min-height:48px;padding:6px 10px;text-align:left;border-radius:10px;background:linear-gradient(145deg,color-mix(in srgb,var(--status-color) 8%,transparent),transparent 75%),#0c1c2ac9;border-color:color-mix(in srgb,var(--status-color) 27%,transparent);transition:border-color .18s,box-shadow .18s,transform .18s}
+  .total-active{grid-column:1/-1}
   .total-card:hover{border-color:color-mix(in srgb,var(--status-color) 65%,transparent);box-shadow:0 0 18px color-mix(in srgb,var(--status-color) 17%,transparent);transform:translateY(-1px)}
   .total-card[aria-pressed=true]{border-color:var(--status-color);box-shadow:0 0 16px color-mix(in srgb,var(--status-color) 24%,transparent)}
-  .total-icon{grid-column:1;grid-row:1;color:var(--status-color);font-size:17px;font-weight:800}
-  .total-label{grid-column:2;grid-row:1;color:var(--text);font-size:11px;font-weight:700;letter-spacing:.1em}
-  .total-value{grid-column:1/-1;grid-row:2;color:var(--status-color);font-size:36px;line-height:1.1;text-align:center;font-variant-numeric:tabular-nums;text-shadow:0 0 18px color-mix(in srgb,var(--status-color) 30%,transparent)}
-  .total-caption{grid-column:1/-1;grid-row:3;color:var(--muted);font-size:11px;text-align:center}
-  .total-running{--status-color:#4ee6ef}.total-completed{--status-color:#72e0b4}.total-failed{--status-color:#ff6674}.total-active{--status-color:#9fc6f4}
+  .total-icon{grid-column:1;grid-row:1/3;color:var(--status-color);font-size:15px;font-weight:800}
+  .total-label{grid-column:2;grid-row:1;color:var(--text);font-size:9px;font-weight:700;letter-spacing:.1em}
+  .total-value{grid-column:3;grid-row:1/3;color:var(--status-color);font-size:22px;line-height:1;text-align:right;font-variant-numeric:tabular-nums;text-shadow:0 0 14px color-mix(in srgb,var(--status-color) 30%,transparent)}
+  .total-caption{grid-column:2;grid-row:2;color:var(--muted);font-size:9px;text-align:left}
+  .total-running{--status-color:#4ee6ef}.total-completed{--status-color:#72e0b4}.total-failed{--status-color:var(--failed-color)}.total-active{--status-color:#9fc6f4}
   .connected-layout #connected-dashboard{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,310px);align-items:start;gap:12px}
   .jobs-column{min-width:0}
   .connected-layout #job-filters{margin-bottom:8px}
@@ -550,13 +553,13 @@ backgroundStyle.textContent=`
   .status-queued .connected-status-dot{--status-color:#ffc36c}
   .status-cancelling .connected-status-dot{--status-color:#bca3ff}
   .status-completed .connected-status-dot{--status-color:#72e0b4}
-  .status-failed .connected-status-dot{--status-color:#ff6674}
+  .status-failed .connected-status-dot{--status-color:var(--failed-color)}
   .connected-job-runtime{color:var(--muted);font:12px ui-monospace,Consolas,monospace;text-align:right}
   .connected-progress{display:flex;align-items:center;gap:8px;min-width:0}
   .connected-progress>span{height:7px;flex:1;overflow:hidden;border-radius:8px;background:#233f50}
   .connected-progress i{display:block;height:100%;border-radius:inherit;background:var(--progress-color,#4ee6ef);transition:width .3s}
   .status-completed .connected-progress i{--progress-color:#4fd18a}
-  .status-failed .connected-progress i{--progress-color:#ff4b59}
+  .status-failed .connected-progress i{--progress-color:var(--failed-color)}
   .connected-progress>b{width:34px;color:var(--text);font-size:11px;font-weight:500;text-align:right}
   .connected-job .pill{white-space:nowrap}
   .connected-job-actions{display:flex;align-items:center;gap:5px}
@@ -577,7 +580,7 @@ backgroundStyle.textContent=`
   .live-event{display:grid;grid-template-columns:58px 8px minmax(0,1fr);align-items:start;gap:7px;padding:10px 11px;border-bottom:1px solid #ffffff10}
   .live-event time{padding-top:1px;color:var(--muted);font:10px ui-monospace,Consolas,monospace}
   .event-dot{width:8px;height:8px;margin-top:4px;border-radius:50%;background:#4ee6ef}
-  .event-dot.completed{background:#72e0b4}.event-dot.failed{background:#ff6674}.event-dot.warning{background:#ffc36c}.event-dot.cancelling,.event-dot.cancelled{background:#bca3ff}
+  .event-dot.completed{background:#72e0b4}.event-dot.failed{background:var(--failed-color)}.event-dot.warning{background:#ffc36c}.event-dot.cancelling,.event-dot.cancelled{background:#bca3ff}
   .event-copy{display:flex;flex-direction:column;min-width:0;gap:2px}
   .event-copy b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:11px}
   .event-message{display:-webkit-box;overflow:hidden;color:var(--muted);font-size:10px;line-height:1.4;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
@@ -597,12 +600,12 @@ backgroundStyle.textContent=`
   .canvas-node.running{--node-color:#4ee6ef;border-color:color-mix(in srgb,var(--node-color) 70%,transparent);box-shadow:0 0 22px color-mix(in srgb,var(--node-color) 30%,transparent),0 12px 32px #0007;animation:canvas-pulse 2.4s ease-in-out infinite}
   .canvas-node.queued{--node-color:#ffc36c}
   .canvas-node.completed{--node-color:#72e0b4}
-  .canvas-node.failed{--node-color:#ff838e}
+  .canvas-node.failed{--node-color:var(--failed-color)}
   .canvas-node.cancelled{--node-color:#829faf}
   .canvas-node.cancelling{--node-color:#bca3ff}
   .canvas-node:not(.running){border-color:color-mix(in srgb,var(--node-color) 52%,transparent)}
   .canvas-node.status-completed{border:2px solid #72e0b4;background:color-mix(in srgb,#72e0b4 8%,var(--bg))}
-  .canvas-node.status-failed{border:2px solid #ff6674;background:color-mix(in srgb,#ff6674 9%,var(--bg))}
+  .canvas-node.status-failed{border:1px solid var(--failed-color);background:color-mix(in srgb,var(--failed-color) 6%,var(--bg));box-shadow:0 8px 24px #0005}
   .canvas-node.status-queued,.canvas-node.status-cancelling{border-style:dashed}
   .canvas-node.status-cancelled{background:color-mix(in srgb,#829faf 5%,var(--bg))}
   @keyframes canvas-pulse{50%{box-shadow:0 0 30px color-mix(in srgb,var(--node-color) 42%,transparent),0 12px 32px #0007}}
@@ -619,21 +622,21 @@ backgroundStyle.textContent=`
   .canvas-node.running .progress-ring{animation:running-ring-pulse 1.8s ease-in-out infinite}
   .progress-ring:after{content:'';position:absolute;inset:4px;border-radius:50%;background:#0b1a24}
   .canvas-node.status-completed .progress-ring:after{content:'✓';display:grid;place-items:center;color:#72e0b4;font-size:18px;font-weight:800}
-  .canvas-node.status-failed .progress-ring:after{content:'!';display:grid;place-items:center;color:#ff838e;font-size:18px;font-weight:800}
+  .canvas-node.status-failed .progress-ring:after{content:'!';display:grid;place-items:center;color:var(--failed-color);font-size:18px;font-weight:800}
   .canvas-node-copy{display:flex;flex-direction:column;min-width:0;gap:2px}
   .canvas-node-copy b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
   .canvas-stage{max-width:165px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px}
   .canvas-node-status{color:var(--node-color);font-size:10px;text-transform:uppercase}
   .status-symbol{display:inline-block;margin-right:5px;font-weight:800}
   .status-completed .status-symbol{color:#72e0b4}
-  .status-failed .status-symbol{color:#ff6674}
+  .status-failed .status-symbol{color:var(--failed-color)}
   .status-running .status-symbol{color:#4ee6ef}
   .status-queued .status-symbol{color:#ffc36c}
   .status-cancelling .status-symbol{color:#bca3ff}
   .status-cancelled .status-symbol{color:#829faf}
   .jobs:not(.canvas)>.job.status-running{border-color:color-mix(in srgb,#4ee6ef 68%,transparent);background:linear-gradient(100deg,color-mix(in srgb,#4ee6ef 7%,transparent),transparent 55%),#0c1c2ac9;animation:running-wash 2.4s ease-in-out infinite}
   .job.status-completed{border:2px solid #72e0b4;background:linear-gradient(100deg,color-mix(in srgb,#72e0b4 8%,transparent),transparent 60%),#0c1c2ac9;box-shadow:0 0 16px color-mix(in srgb,#72e0b4 30%,transparent),0 12px 30px #0003}
-  .job.status-failed{border:2px solid #ff6674;background:linear-gradient(100deg,color-mix(in srgb,#ff6674 9%,transparent),transparent 60%),#0c1c2ac9;box-shadow:0 0 18px color-mix(in srgb,#ff6674 36%,transparent),0 12px 30px #0003}
+  .job.status-failed{border:1px solid var(--failed-color);background:linear-gradient(100deg,color-mix(in srgb,var(--failed-color) 6%,transparent),transparent 60%),#0c1c2ac9;box-shadow:0 8px 24px #0005}
   .jobs:not(.canvas)>.job.status-queued,.jobs:not(.canvas)>.job.status-cancelling{border-style:dashed}
   .job.status-queued{background:linear-gradient(100deg,color-mix(in srgb,#ffc36c 6%,transparent),transparent 60%),#0c1c2ac9}
   .job.status-cancelling{background:linear-gradient(100deg,color-mix(in srgb,#bca3ff 6%,transparent),transparent 60%),#0c1c2ac9}
@@ -661,9 +664,9 @@ backgroundStyle.textContent=`
   .artifact-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:11px ui-monospace,Consolas,monospace}
   .artifact-row button{padding:3px 7px;font-size:11px}
   @media(max-width:900px){.canvas-node.expanded{width:min(620px,calc(100vw - 55px))}}
-  @media(max-width:1200px){.connected-layout #connected-dashboard{grid-template-columns:minmax(0,1fr) 270px}.connected-layout #connected-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.connected-job-row{grid-template-columns:minmax(120px,1.3fr) 50px minmax(80px,1fr) auto auto;gap:8px}.connected-job .pill{font-size:9px;padding:2px 7px}}
+  @media(max-width:1200px){.connected-layout #connected-dashboard{grid-template-columns:minmax(0,1fr) 270px}.connected-layout #connected-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.connected-job-row{grid-template-columns:minmax(120px,1.3fr) 50px minmax(80px,1fr) auto auto;gap:8px}.connected-job .pill{font-size:9px;padding:2px 7px}}
   @media(max-width:900px){header{padding:6px 9px}:root{--logo-size:52px}.connected-layout #connected-dashboard{grid-template-columns:minmax(0,1fr)}.connected-layout .live-events{order:2}.connected-layout #live-events-list{max-height:340px;min-height:100px}.brand-copy b{font-size:18px}.brand-copy small{font-size:7px}}
-  @media(max-width:600px){.connected-layout #connected-summary{gap:7px}.total-card{min-height:94px;padding:9px}.total-value{font-size:29px}.connected-job-row{grid-template-columns:minmax(0,1fr) auto auto;gap:6px;padding:9px}.connected-job-name{grid-column:1/3}.connected-job-runtime{grid-column:3;grid-row:1}.connected-progress{grid-column:1;grid-row:2}.connected-job-row>.pill{grid-column:2;grid-row:2}.connected-job-actions{grid-column:3;grid-row:2}.connected-job-details .panels{grid-template-columns:1fr}.connected-layout #job-filters{gap:7px}.jobs-title{width:100%}}
+  @media(max-width:600px){.connected-layout #connected-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.total-card{min-height:44px;padding:5px 8px}.total-active{grid-column:1/-1}.total-value{font-size:20px}.connected-job-row{grid-template-columns:minmax(0,1fr) auto auto;gap:6px;padding:9px}.connected-job-name{grid-column:1/3}.connected-job-runtime{grid-column:3;grid-row:1}.connected-progress{grid-column:1;grid-row:2}.connected-job-row>.pill{grid-column:2;grid-row:2}.connected-job-actions{grid-column:3;grid-row:2}.connected-job-details .panels{grid-template-columns:1fr}.connected-layout #job-filters{gap:7px}.jobs-title{width:100%}}
   @media(max-width:600px){.workspace-head{align-items:flex-start;flex-wrap:wrap}.run-controls{width:100%}.run-controls select{flex:1;min-width:0}.jobs.canvas{height:65vh;min-height:360px;max-height:none}}
   @media(max-width:600px){#job-filters input{min-width:100%}#job-filter-count{margin-left:0}}
 `;

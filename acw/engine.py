@@ -102,6 +102,21 @@ class Engine:
             self.registry = registry
             return self._catalog_entries()
 
+    def edit_script(self, name):
+        with self.lock:
+            if not isinstance(name, str) or name not in self.registry:
+                raise ValueError('Unknown script. Reload the catalog and select an approved script.')
+            path = self.registry[name]['path'].resolve(strict=True)
+        if path.parent != SCRIPT_DIR.resolve() or not path.is_file() or path.suffix.lower() != '.py':
+            raise ValueError('Selected script is missing or invalid.')
+        if os.name == 'nt':
+            subprocess.Popen(['notepad.exe', str(path)])
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', '-t', str(path)])
+        else:
+            subprocess.Popen(['xdg-open', str(path)])
+        return {'ok': True}
+
     def start(self, name, arguments=None):
         if arguments is None:
             arguments = []
