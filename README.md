@@ -14,6 +14,14 @@ A **local-only, command-first execution workspace** for launching approved Pytho
 
 ![ACW execution workspace in the violet layered layout](screenshots/acw-layered-violet.png)
 
+### Amber canvas layout
+
+![ACW execution workspace in the violet layered layout](screenshots/acw-canvas-amber.png)
+
+### Green layered layout
+
+![ACW execution workspace in the violet layered layout](screenshots/acw-layered-green.png)
+
 ## Features
 
 - Persistent toolbar with monitor checkboxes, layout selector, live date/time, and user preferences
