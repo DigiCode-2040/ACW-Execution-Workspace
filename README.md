@@ -8,7 +8,7 @@ A **local-only, command-first execution workspace** for launching approved Pytho
 
 ### Cyan collapsed dashboard
 
-![ACW execution workspace in the cyan collapsed dashboard](screenshots/acw-connected-cyan.png)
+![ACW execution workspace in the cyan collapsed dashboard](screenshots/acw-collapsed-cyan.png)
 
 ### Violet layered layout
 
