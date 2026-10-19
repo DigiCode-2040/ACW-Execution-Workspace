@@ -6,9 +6,9 @@ A **local-only, command-first execution workspace** for launching approved Pytho
 
 ## Screenshots
 
-### Cyan connected layout
+### Cyan collapsed dashboard
 
-![ACW execution workspace in the cyan connected layout](screenshots/acw-connected-cyan.png)
+![ACW execution workspace in the cyan collapsed dashboard](screenshots/acw-connected-cyan.png)
 
 ### Violet layered layout
 
@@ -20,11 +20,15 @@ A **local-only, command-first execution workspace** for launching approved Pytho
 - Expandable terminal (`Enter` executes; `Shift+Enter` inserts a newline)
 - Configurable recent action history (1–20 lines)
 - Job status filters and search across job details, output, events, and artifacts
+- At-a-glance status cues across layouts: pulsing running jobs, green completed checks, red failures, and muted queued/cancelling states
 - Real asynchronous Python subprocess execution, with a controlled script catalog
 - Runtime catalog reload and argument passing to discovered scripts
 - Script selector beside Run Selected, plus Exit App in Preferences
-- Task → Working Parts → Output panels for each execution
-- Connected, flow, layered 2.5D, collapsed, and spatial Canvas layout modes
+- Task → Working Parts → Output flow, with a discreet per-job notes button that opens a fourth Notes panel when needed
+- Toggleable Workspace Note for session-wide focus and reminders
+- Collapsed dashboard with live job totals, compact progress rows, expandable four-panel job details, and a recent-events sidebar
+- ACW brand mark with the full Advanced Control Workspace name
+- Collapsed dashboard, flow, layered 2.5D, and spatial Canvas layout modes
 - Canvas job nodes with live progress rings, expandable details, draggable/persisted positions, pan, zoom, and auto-arrange
 - Four themes (Cyan Cyberpunk default, Quantum Violet, Matrix Green, Industrial Amber)
 - Glass opacity, edge glow, compact-density preferences (saved locally in the embedded webview)
@@ -67,7 +71,6 @@ catalog
 catalog reload
 run <command> [arguments...]
 list
-layout connected
 layout flow
 layout layered
 layout collapsed
@@ -76,7 +79,11 @@ stop <job-id>
 clear
 ```
 
-Canvas is an optional fifth layout; the four existing layouts remain available. Its nodes can be dragged with a pointer or focused and moved with the arrow keys. Select a node's title/progress control to expand or collapse its three-panel job details. Use the Canvas controls to zoom, reset the view, or auto-arrange all nodes; Ctrl+mouse wheel zooms and dragging the empty surface pans. Node positions and zoom are saved in the webview's local preferences. Canvas currently shows jobs independently; connectors and job relationships are not modeled.
+Canvas is an optional fourth layout. Its nodes can be dragged with a pointer or focused and moved with the arrow keys. Select a node's title/progress control to expand or collapse its details; use the discreet notes button to open its attached notes drawer. In the Collapsed dashboard, the same button expands job details with the fourth Notes panel; in Flow and Layered layouts it adds the Notes panel to the existing task flow. Use the Canvas controls to zoom, reset the view, or auto-arrange all nodes; Ctrl+mouse wheel zooms and dragging the empty surface pans. Node positions and zoom are saved in the webview's local preferences. Canvas currently shows jobs independently; connectors and job relationships are not modeled.
+
+Collapsed dashboard shows live running, completed, failed, and active totals above compact job rows, with recent timestamped job events in a side panel. Select a total to filter the job list; select a row's details control to expand its panels. The former standalone Collapsed mode has been replaced by this dashboard. The `layout connected` command remains as an alias for `layout collapsed`.
+
+Per-job notes are saved by job ID and the Workspace Note is saved separately in the webview's local storage. Enable or hide the global Workspace Note from Preferences; its content is preserved when hidden. These notes stay on the local machine and are not included in execution snapshots.
 
 Scripts in the catalog are discovered when the app starts. Use `catalog reload` to rescan the `scripts/` folder while the app is running; invalid metadata is reported and leaves the existing catalog unchanged. For example, `run organize --target "C:\Users\you\Downloads Archive" --dry-run` passes the remaining tokens as arguments to the organizer script. Single- or double-quoted values preserve spaces. The Run Selected button launches the selected script without arguments.
 
@@ -160,7 +167,7 @@ Relative artifact paths are resolved from the project root. For an output direct
 
 - **No listening service:** Python and the HTML frontend communicate through pywebview's local JavaScript API bridge.
 - **Concurrent execution:** Jobs run as subprocesses in background threads, so the UI remains responsive.
-- **Local persistence:** Preferences use webview localStorage; exited-job snapshots are JSON files under `runs/` and are not restored into the UI.
+- **Local persistence:** Preferences and notes use webview localStorage; exited-job snapshots are JSON files under `runs/` and are not restored into the UI.
 - **Security boundary:** This is a local desktop app, not a sandbox. Scripts can access resources available to the current OS user. Do not add untrusted scripts to the catalog.
 - **Cancellation:** Attempts to terminate the job and child processes. Some subprocess trees may require additional platform-specific cleanup.
 - **Telemetry:** Best-effort CPU/memory sampling, not a full tracing or profiling system. Stage timing, per-stage resources, input versioning, file verification, historical comparison, and multi-step workflow DAGs are future work.
