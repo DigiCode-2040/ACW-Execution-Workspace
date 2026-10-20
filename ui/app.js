@@ -3,7 +3,7 @@ const defaults={theme:'cyan',layout:'collapsed',historyCount:5,opacity:78,glow:t
 let prefs={...defaults}, jobs=[], history=[], catalogEntries=[], bridgeReady=false, busy=false;
 let commandHistory=[],commandHistoryIndex=0,commandDraft='',jobStatusFilter='all',jobSearch='';
 try{prefs={...defaults,...JSON.parse(localStorage.getItem('acw.preferences')||'{}')}}catch{}
-if(prefs.layout==='connected')prefs.layout='collapsed';
+if(!['collapsed','canvas'].includes(prefs.layout))prefs.layout='collapsed';
 if(!prefs.canvasPositions||typeof prefs.canvasPositions!=='object')prefs.canvasPositions={};
 if(!Number.isFinite(prefs.canvasZoom))prefs.canvasZoom=1;
 prefs.canvasZoom=Math.max(.5,Math.min(1.5,prefs.canvasZoom));
@@ -63,6 +63,8 @@ function resizeCanvasWorld(node){
   world.style.height=`${Math.ceil(Math.max(parseFloat(world.style.height)||0,$('jobs').clientHeight-2,bottom))}px`;
 }
 function renderConnectedOverview(){
+  const eventsList=$('live-events-list');
+  const eventsScrollTop=eventsList.scrollTop;
   const counts={
     running:jobs.filter(job=>job.status==='running').length,
     completed:jobs.filter(job=>job.status==='completed').length,
@@ -84,6 +86,7 @@ function renderConnectedOverview(){
       ['completed','running','queued','cancelled','cancelling'].includes(kind)?kind:'info';
     return `<li class="live-event"><time>${Number.isNaN(time)?'--:--:--':escapeHTML(new Date(time).toLocaleTimeString())}</time><span class="event-dot ${status}" aria-hidden="true"></span><div class="event-copy"><b>${escapeHTML(event.jobLabel||event.jobId)}</b><span class="event-message">${escapeHTML(event.message)}</span></div></li>`;
   }).join('')||'<li class="live-events-empty">Events will appear here as jobs run.</li>';
+  eventsList.scrollTop=eventsScrollTop;
 }
 function formatRuntime(seconds){
   const total=Math.max(0,Math.floor(Number(seconds)||0));
@@ -92,6 +95,20 @@ function formatRuntime(seconds){
 }
 function renderJobs(){
   const el=$('jobs');
+  const pageScroll={left:window.scrollX,top:window.scrollY};
+  const jobsScroll={left:el.scrollLeft,top:el.scrollTop};
+  const logScroll=Array.from(el.querySelectorAll('.logs'),log=>({left:log.scrollLeft,top:log.scrollTop}));
+  const restoreScroll=()=>{
+    el.scrollLeft=jobsScroll.left;
+    el.scrollTop=jobsScroll.top;
+    el.querySelectorAll('.logs').forEach((log,index)=>{
+      if(logScroll[index]){
+        log.scrollLeft=logScroll[index].left;
+        log.scrollTop=logScroll[index].top;
+      }
+    });
+    window.scrollTo(pageScroll.left,pageScroll.top);
+  };
   const activeNote=document.activeElement?.matches('textarea[data-job-note]')?{
     jobId:document.activeElement.dataset.jobNote,
     start:document.activeElement.selectionStart,
@@ -110,8 +127,8 @@ function renderJobs(){
   const controls=$('canvas-controls');
   controls.hidden=prefs.layout!=='canvas';
   $('canvas-zoom-label').textContent=`${Math.round(prefs.canvasZoom*100)}%`;
-  if(!jobs.length){el.innerHTML='<div class="empty">No executions yet. Select a script above or type run &lt;command&gt;.</div>';return}
-  if(!matches.length){el.innerHTML='<div class="empty">No jobs match the current filters.</div>';return}
+  if(!jobs.length){el.innerHTML='<div class="empty">No executions yet. Select a script above or type run &lt;command&gt;.</div>';restoreScroll();return}
+  if(!matches.length){el.innerHTML='<div class="empty">No jobs match the current filters.</div>';restoreScroll();return}
   if(prefs.layout==='collapsed'){
     el.innerHTML=matches.map(job=>{
       const progress=Math.max(0,Math.min(100,Number(job.progress)||0));
@@ -195,12 +212,6 @@ function renderJobs(){
         grab.addEventListener('pointercancel',finish);
       };
     });
-    if(previousScroll){el.scrollLeft=previousScroll.left;el.scrollTop=previousScroll.top}
-  }else{
-    el.innerHTML=matches.map(job=>{
-      const hasNote=Boolean((jobNotes[job.id]||'').trim());
-      return `<article class="job status-${escapeHTML(job.status)}"><div class="job-head"><div><b>${escapeHTML(job.label)}</b> <span class="meta">#${escapeHTML(job.id)}</span></div><div><span class="pill ${escapeHTML(job.status)}"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span> ${job.status==='running'?`<button class="cancel" data-id="${escapeHTML(job.id)}">Stop</button>`:''} <button class="note-toggle${hasNote?' has-note':''}" type="button" data-note-toggle="${escapeHTML(job.id)}" aria-label="${notesExpanded.has(job.id)?'Close':'Open'} notes for ${escapeHTML(job.label)}" aria-expanded="${notesExpanded.has(job.id)}" title="${hasNote?'Notes saved':'Add a note'}">▤</button></div></div>${jobDetails(job)}</article>`;
-    }).join('');
   }
   el.querySelectorAll('.cancel').forEach(button=>button.onclick=async()=>{
     try{await window.pywebview.api.cancel_job(button.dataset.id);log('Cancellation requested: '+button.dataset.id)}
@@ -254,10 +265,11 @@ function renderJobs(){
   if(activeNote){
     const editor=el.querySelector(`textarea[data-job-note="${CSS.escape(activeNote.jobId)}"]`);
     if(editor){
-      editor.focus();
+      editor.focus({preventScroll:true});
       editor.setSelectionRange(activeNote.start,activeNote.end);
     }
   }
+  restoreScroll();
 }
 function closeMenus(){
   document.querySelectorAll('.popup').forEach(p=>{p.hidden=true});
@@ -292,7 +304,7 @@ function setupMenus(){
   });
   $('monitor-options').innerHTML=Object.entries(monLabels).map(([k,v])=>`<label><input type="checkbox" data-monitor="${k}" ${prefs.monitors.includes(k)?'checked':''}>${escapeHTML(v)}</label>`).join('');
   document.querySelectorAll('[data-monitor]').forEach(c=>c.onchange=()=>{prefs.monitors=Array.from(document.querySelectorAll('[data-monitor]:checked')).map(x=>x.dataset.monitor);apply()});
-  $('layout-options').innerHTML=['collapsed','flow','layered','canvas'].map(k=>`<label><input type="radio" name="layout" value="${k}" ${prefs.layout===k?'checked':''}>${k[0].toUpperCase()+k.slice(1)}</label>`).join('');
+  $('layout-options').innerHTML=['collapsed','canvas'].map(k=>`<label><input type="radio" name="layout" value="${k}" ${prefs.layout===k?'checked':''}>${k[0].toUpperCase()+k.slice(1)}</label>`).join('');
   document.querySelectorAll('[name=layout]').forEach(c=>c.onchange=()=>setLayout(c.value));
   $('theme').onchange=e=>{prefs.theme=e.target.value;apply()};
   $('history-count').oninput=e=>{prefs.historyCount=Number(e.target.value);apply()};
@@ -326,7 +338,7 @@ async function command(line){
   log('> '+line);
   try{
     const [verb,...args]=parseCommandLine(line);
-    if(verb==='help')log('Commands: help, catalog [reload], run <command> [arguments...], list, layout collapsed|flow|layered|canvas, stop <id>, clear (connected is an alias for collapsed)');
+    if(verb==='help')log('Commands: help, catalog [reload], run <command> [arguments...], list, layout collapsed|canvas, stop <id>, clear (connected is an alias for collapsed)');
     else if(verb==='catalog'){
       if(args.length>1||(args.length===1&&args[0]!=='reload'))throw Error('Usage: catalog [reload]');
       if(args.includes('reload'))await refreshCatalog(true);
@@ -344,7 +356,7 @@ async function command(line){
       log('Cancellation requested');
     }else if(verb==='list')log(jobs.map(job=>job.id+':'+job.status).join(' | ')||'No jobs');
     else if(verb==='layout'){
-      if(!['connected','flow','layered','collapsed','canvas'].includes(args[0]))throw Error('Unknown layout');
+      if(!['connected','collapsed','canvas'].includes(args[0]))throw Error('Unknown layout');
       const layout=args[0]==='connected'?'collapsed':args[0];
       setLayout(layout);log('Layout: '+layout);
     }else if(verb==='clear'){history=[];renderHistory()}
@@ -435,7 +447,7 @@ function setLayout(layout){
   canvasDragging=false;
   canvasPan=null;
   jobsViewport.classList.remove('panning');
-  prefs.layout=layout==='connected'?'collapsed':layout;
+  prefs.layout=layout==='connected'||!['collapsed','canvas'].includes(layout)?'collapsed':layout;
   apply();
 }
 jobsViewport.addEventListener('pointerdown',event=>{
@@ -508,8 +520,11 @@ setTimeout(()=>{if(!bridgeReady)$('connection').textContent='Open this file thro
 
 const backgroundStyle=document.createElement('style');
 backgroundStyle.textContent=`
-  :root{--logo-size:80px;--logo-cyan:#22d3ee;--failed-color:#8997a1}
-  header{height:auto;min-height:56px;padding:6px 22px}
+  :root{--logo-size:52px;--logo-cyan:#22d3ee;--failed-color:#8997a1}
+  body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  body>main{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;padding-bottom:6px}
+  header{height:auto;min-height:0;padding:3px 14px}
+  .foot{display:none}
   #ambient-background{position:fixed;inset:0;z-index:0;width:100%;height:100%;pointer-events:none}
   body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;background-image:linear-gradient(color-mix(in srgb,var(--accent) 4.5%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--accent) 4.5%,transparent) 1px,transparent 1px);background-size:32px 32px}
   body>header{z-index:10}
@@ -524,7 +539,7 @@ backgroundStyle.textContent=`
   .catalog-icon-button{width:34px;height:34px;padding:4px;font-size:18px;line-height:1}
   .catalog-icon-button:disabled{opacity:.45;cursor:not-allowed}
   #connected-summary{display:none}
-  #connected-dashboard{display:contents}
+  #connected-dashboard{display:flex;flex:1;flex-direction:column;min-height:0}
   .live-events{display:none}
   .connected-layout #connected-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0 0 12px}
   .total-card{display:grid;grid-template-columns:26px minmax(0,1fr) auto;grid-template-rows:auto auto;align-items:center;column-gap:8px;min-width:0;min-height:48px;padding:6px 10px;text-align:left;border-radius:10px;background:linear-gradient(145deg,color-mix(in srgb,var(--status-color) 8%,transparent),transparent 75%),#0c1c2ac9;border-color:color-mix(in srgb,var(--status-color) 27%,transparent);transition:border-color .18s,box-shadow .18s,transform .18s}
@@ -536,12 +551,13 @@ backgroundStyle.textContent=`
   .total-value{grid-column:3;grid-row:1/3;color:var(--status-color);font-size:22px;line-height:1;text-align:right;font-variant-numeric:tabular-nums;text-shadow:0 0 14px color-mix(in srgb,var(--status-color) 30%,transparent)}
   .total-caption{grid-column:2;grid-row:2;color:var(--muted);font-size:9px;text-align:left}
   .total-running{--status-color:#4ee6ef}.total-completed{--status-color:#72e0b4}.total-failed{--status-color:var(--failed-color)}.total-active{--status-color:#9fc6f4}
-  .connected-layout #connected-dashboard{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,310px);align-items:start;gap:12px}
-  .jobs-column{min-width:0}
+  .connected-layout #connected-dashboard{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,310px);align-items:stretch;gap:12px;flex:1;min-height:0}
+  @media(min-width:901px){.connected-layout #connected-dashboard:has(#jobs>.empty){align-content:start}.connected-layout #connected-dashboard:has(#jobs>.empty) .jobs-column{height:max-content;align-self:start}.connected-layout #connected-dashboard:has(#jobs>.empty) .jobs.connected{flex:none}}
+  .jobs-column{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0}
   .connected-layout #job-filters{margin-bottom:8px}
   .jobs-title{color:var(--text);font-size:12px;letter-spacing:.12em}
   .connected-layout #job-filter-count{margin-left:0}
-  .connected-layout .jobs.connected{gap:8px}
+  .connected-layout .jobs.connected{flex:1;min-height:0;overflow-y:auto;align-content:start;grid-auto-rows:max-content;gap:8px;padding:10px;border:1px solid var(--border);border-radius:var(--radius);background:linear-gradient(160deg,color-mix(in srgb,var(--accent) 5%,transparent),transparent 38%),#081721e8;scrollbar-color:color-mix(in srgb,var(--accent) 30%,transparent) transparent}
   .connected-job{padding:0;overflow:hidden}
   .connected-job-row{display:grid;grid-template-columns:minmax(150px,1.45fr) 58px minmax(90px,1fr) auto auto;align-items:center;gap:12px;min-height:64px;padding:9px 12px}
   .connected-job-name{display:flex;align-items:center;gap:10px;min-width:0}
@@ -571,12 +587,12 @@ backgroundStyle.textContent=`
   .connected-job-details .pane{min-height:130px;padding:12px}
   .connected-job-details .pane:not(:last-child):after{display:none}
   .live-events{min-width:0;overflow:hidden;border:1px solid var(--border);border-radius:var(--radius);background:linear-gradient(160deg,color-mix(in srgb,var(--accent) 5%,transparent),transparent 38%),#081721e8}
-  .connected-layout .live-events{display:flex;flex-direction:column}
+  .connected-layout .live-events{display:flex;flex-direction:column;min-height:0}
   .live-events-head{display:flex;align-items:center;justify-content:space-between;min-height:47px;padding:0 13px;border-bottom:1px solid var(--border)}
   .live-events-head h2{margin:0;color:var(--text);font-size:12px;letter-spacing:.12em}
   .live-events-head>span{display:flex;align-items:center;gap:6px;padding:3px 8px;border:1px solid color-mix(in srgb,#72e0b4 30%,transparent);border-radius:20px;color:#72e0b4;font-size:10px}
   .live-events-head>span i{width:7px;height:7px;border-radius:50%;background:#72e0b4;box-shadow:0 0 8px #72e0b4}
-  #live-events-list{display:flex;flex-direction:column;max-height:calc(100vh - 400px);min-height:220px;overflow-y:auto;margin:0;padding:0;list-style:none;scrollbar-color:color-mix(in srgb,var(--accent) 30%,transparent) transparent}
+  #live-events-list{display:flex;flex:1;flex-direction:column;min-height:0;overflow-y:auto;margin:0;padding:0;list-style:none;scrollbar-color:color-mix(in srgb,var(--accent) 30%,transparent) transparent}
   .live-event{display:grid;grid-template-columns:58px 8px minmax(0,1fr);align-items:start;gap:7px;padding:10px 11px;border-bottom:1px solid #ffffff10}
   .live-event time{padding-top:1px;color:var(--muted);font:10px ui-monospace,Consolas,monospace}
   .event-dot{width:8px;height:8px;margin-top:4px;border-radius:50%;background:#4ee6ef}
@@ -592,7 +608,7 @@ backgroundStyle.textContent=`
   #canvas-controls[hidden]{display:none}
   #canvas-controls button{padding:5px 10px}
   #canvas-zoom-label{min-width:42px;text-align:center;color:var(--muted);font:12px monospace}
-  .jobs.canvas{display:block;position:relative;height:70vh;min-height:440px;max-height:calc(100vh - 300px);overflow:auto;overscroll-behavior:contain;border:1px solid var(--border);border-radius:var(--radius);background-color:color-mix(in srgb,var(--bg) 84%,transparent);background-image:linear-gradient(color-mix(in srgb,var(--accent) 8%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--accent) 8%,transparent) 1px,transparent 1px),radial-gradient(ellipse at 50% 30%,color-mix(in srgb,var(--accent) 8%,transparent),transparent 70%);background-size:32px 32px,32px 32px,100% 100%}
+  .jobs.canvas{display:block;position:relative;flex:1;height:auto;min-height:300px;max-height:none;overflow:auto;overscroll-behavior:contain;border:1px solid var(--border);border-radius:var(--radius);background-color:color-mix(in srgb,var(--bg) 84%,transparent);background-image:linear-gradient(color-mix(in srgb,var(--accent) 8%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--accent) 8%,transparent) 1px,transparent 1px),radial-gradient(ellipse at 50% 30%,color-mix(in srgb,var(--accent) 8%,transparent),transparent 70%);background-size:32px 32px,32px 32px,100% 100%}
   .jobs.canvas.panning{cursor:grabbing;user-select:none}
   .canvas-world{position:relative}
   .canvas-nodes{position:absolute;left:0;top:0;transform-origin:top left}
@@ -665,9 +681,9 @@ backgroundStyle.textContent=`
   .artifact-row button{padding:3px 7px;font-size:11px}
   @media(max-width:900px){.canvas-node.expanded{width:min(620px,calc(100vw - 55px))}}
   @media(max-width:1200px){.connected-layout #connected-dashboard{grid-template-columns:minmax(0,1fr) 270px}.connected-layout #connected-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.connected-job-row{grid-template-columns:minmax(120px,1.3fr) 50px minmax(80px,1fr) auto auto;gap:8px}.connected-job .pill{font-size:9px;padding:2px 7px}}
-  @media(max-width:900px){header{padding:6px 9px}:root{--logo-size:52px}.connected-layout #connected-dashboard{grid-template-columns:minmax(0,1fr)}.connected-layout .live-events{order:2}.connected-layout #live-events-list{max-height:340px;min-height:100px}.brand-copy b{font-size:18px}.brand-copy small{font-size:7px}}
+  @media(max-width:900px){header{padding:3px 9px}:root{--logo-size:52px}.connected-layout #connected-dashboard{grid-template-columns:minmax(0,1fr)}.connected-layout .live-events{order:2}.connected-layout #live-events-list{flex:initial;max-height:340px;min-height:100px}.brand-copy b{font-size:18px}.brand-copy small{font-size:7px}}
   @media(max-width:600px){.connected-layout #connected-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.total-card{min-height:44px;padding:5px 8px}.total-active{grid-column:1/-1}.total-value{font-size:20px}.connected-job-row{grid-template-columns:minmax(0,1fr) auto auto;gap:6px;padding:9px}.connected-job-name{grid-column:1/3}.connected-job-runtime{grid-column:3;grid-row:1}.connected-progress{grid-column:1;grid-row:2}.connected-job-row>.pill{grid-column:2;grid-row:2}.connected-job-actions{grid-column:3;grid-row:2}.connected-job-details .panels{grid-template-columns:1fr}.connected-layout #job-filters{gap:7px}.jobs-title{width:100%}}
-  @media(max-width:600px){.workspace-head{align-items:flex-start;flex-wrap:wrap}.run-controls{width:100%}.run-controls select{flex:1;min-width:0}.jobs.canvas{height:65vh;min-height:360px;max-height:none}}
+  @media(max-width:600px){.workspace-head{align-items:flex-start;flex-wrap:wrap}.run-controls{width:100%}.run-controls select{flex:1;min-width:0}.jobs.canvas{height:auto;min-height:300px;max-height:none}}
   @media(max-width:600px){#job-filters input{min-width:100%}#job-filter-count{margin-left:0}}
 `;
 document.head.append(backgroundStyle);

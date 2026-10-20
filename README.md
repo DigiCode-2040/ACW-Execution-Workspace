@@ -1,6 +1,6 @@
 # ACW — Adaptive Context Workspace
 
-A **local-only, command-first execution workspace** for launching approved Python scripts and observing asynchronous jobs. The frontend uses HTML5/CSS with JavaScript in a separate file, translucent panels, configurable cyberpunk themes, and multiple execution layouts. The backend runs Python scripts through a **pywebview JavaScript ↔ Python bridge**. **No FastAPI server, network listener, CDN, or cloud service is required.**
+A **local-only, command-first execution workspace** for launching approved Python scripts and observing asynchronous jobs. The frontend uses HTML5/CSS with JavaScript in a separate file, translucent panels, configurable cyberpunk themes, and two execution layouts. The backend runs Python scripts through a **pywebview JavaScript ↔ Python bridge**. **No FastAPI server, network listener, CDN, or cloud service is required.**
 
 > **Status:** Early working prototype / v4 foundation. Designed for local desktop use. Not yet a hardened production job scheduler.
 
@@ -9,10 +9,6 @@ A **local-only, command-first execution workspace** for launching approved Pytho
 ### Cyan collapsed dashboard
 
 ![ACW execution workspace in the cyan collapsed dashboard](screenshots/acw-collapsed-cyan.png)
-
-### Violet layered layout
-
-![ACW execution workspace in the violet layered layout](screenshots/acw-layered-violet.png)
 
 ## Features
 
@@ -24,11 +20,11 @@ A **local-only, command-first execution workspace** for launching approved Pytho
 - Real asynchronous Python subprocess execution, with a controlled script catalog
 - Runtime catalog reload and argument passing to discovered scripts
 - Script selector beside Run Selected, icon controls to reload scripts or open the selected script for editing, plus Exit App in Preferences
-- Task → Working Parts → Output flow, with a discreet per-job notes button that opens a fourth Notes panel when needed
+- Task → Working Parts → Output sequence, with a discreet per-job notes button that opens a fourth Notes panel when needed
 - Toggleable Workspace Note for session-wide focus and reminders
 - Collapsed dashboard with live job totals, compact progress rows, expandable four-panel job details, and a recent-events sidebar
 - ACW brand mark with the full Advanced Control Workspace name
-- Collapsed dashboard, flow, layered 2.5D, and spatial Canvas layout modes
+- Collapsed dashboard and spatial Canvas layout modes
 - Canvas job nodes with live progress rings, expandable details, draggable/persisted positions, pan, zoom, and auto-arrange
 - Four themes (Cyan Cyberpunk default, Quantum Violet, Matrix Green, Industrial Amber)
 - Glass opacity, edge glow, compact-density preferences (saved locally in the embedded webview)
@@ -71,15 +67,13 @@ catalog
 catalog reload
 run <command> [arguments...]
 list
-layout flow
-layout layered
 layout collapsed
 layout canvas
 stop <job-id>
 clear
 ```
 
-Canvas is an optional fourth layout. Its nodes can be dragged with a pointer or focused and moved with the arrow keys. Select a node's title/progress control to expand or collapse its details; use the discreet notes button to open its attached notes drawer. In the Collapsed dashboard, the same button expands job details with the fourth Notes panel; in Flow and Layered layouts it adds the Notes panel to the existing task flow. Use the Canvas controls to zoom, reset the view, or auto-arrange all nodes; Ctrl+mouse wheel zooms and dragging the empty surface pans. Node positions and zoom are saved in the webview's local preferences. Canvas currently shows jobs independently; connectors and job relationships are not modeled.
+Canvas is an optional layout. Its nodes can be dragged with a pointer or focused and moved with the arrow keys. Select a node's title/progress control to expand or collapse its details; use the discreet notes button to open its attached notes drawer. In the Collapsed dashboard, the same button expands job details with the fourth Notes panel. Use the Canvas controls to zoom, reset the view, or auto-arrange all nodes; Ctrl+mouse wheel zooms and dragging the empty surface pans. Node positions and zoom are saved in the webview's local preferences. Canvas currently shows jobs independently; connectors and job relationships are not modeled.
 
 Collapsed dashboard shows live running, completed, failed, and active totals above compact job rows, with recent timestamped job events in a side panel. Select a total to filter the job list; select a row's details control to expand its panels. The former standalone Collapsed mode has been replaced by this dashboard. The `layout connected` command remains as an alias for `layout collapsed`.
 
@@ -170,7 +164,6 @@ Relative artifact paths are resolved from the project root. For an output direct
 - **Security boundary:** This is a local desktop app, not a sandbox. Scripts can access resources available to the current OS user. Do not add untrusted scripts to the catalog.
 - **Cancellation:** Attempts to terminate the job and child processes. Some subprocess trees may require additional platform-specific cleanup.
 - **Telemetry:** Best-effort CPU/memory sampling, not a full tracing or profiling system. Stage timing, per-stage resources, input versioning, file verification, historical comparison, and multi-step workflow DAGs are future work.
-- **Rendering:** Layered mode uses CSS perspective, not a WebGL engine.
 - **Platform testing:** Behavior can vary across desktop webview engines; validate on your target OS before relying on it for critical jobs.
 
 ## Roadmap
