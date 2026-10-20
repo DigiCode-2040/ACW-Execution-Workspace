@@ -1,30 +1,19 @@
-# ACW — Adaptive Context Workspace
+# ACW — Advanced Control Workspace
 
 A **local-only, command-first execution workspace** for launching approved Python scripts and observing asynchronous jobs. The frontend uses HTML5/CSS with JavaScript in a separate file, translucent panels, configurable cyberpunk themes, and two execution layouts. The backend runs Python scripts through a **pywebview JavaScript ↔ Python bridge**. **No FastAPI server, network listener, CDN, or cloud service is required.**
 
 > **Status:** Early working prototype / v4 foundation. Designed for local desktop use. Not yet a hardened production job scheduler.
 
-## Screenshots
+## Archived screenshots
+
+These captures show an earlier UI and do not reflect the current layout and spacing.
 
 ### Cyan collapsed dashboard
-
 ![ACW execution workspace in the cyan collapsed dashboard](screenshots/acw-collapsed-cyan.png)
 
-<<<<<<< HEAD
-=======
-### Violet layered layout
-
-![ACW execution workspace in the violet layered layout](screenshots/acw-layered-violet.png)
-
 ### Amber canvas layout
+![ACW execution workspace in the amber Canvas layout](screenshots/acw-canvas-amber.png)
 
-![ACW execution workspace in the violet layered layout](screenshots/acw-canvas-amber.png)
-
-### Green layered layout
-
-![ACW execution workspace in the violet layered layout](screenshots/acw-layered-green.png)
-
->>>>>>> 12c445449b653450876dd2ce3f882eab4b107746
 ## Features
 
 - Persistent toolbar with monitor checkboxes, layout selector, live date/time, and user preferences
@@ -35,7 +24,7 @@ A **local-only, command-first execution workspace** for launching approved Pytho
 - Real asynchronous Python subprocess execution, with a controlled script catalog
 - Runtime catalog reload and argument passing to discovered scripts
 - Script selector beside Run Selected, icon controls to reload scripts or open the selected script for editing, plus Exit App in Preferences
-- Task → Working Parts → Output sequence, with a discreet per-job notes button that opens a fourth Notes panel when needed
+- Task → Working Parts → Output details, with per-job notes (a fourth panel in Collapsed and a notes drawer in Canvas)
 - Toggleable Workspace Note for session-wide focus and reminders
 - Collapsed dashboard with live job totals, compact progress rows, expandable four-panel job details, and a recent-events sidebar
 - ACW brand mark with the full Advanced Control Workspace name
@@ -90,7 +79,7 @@ clear
 
 Canvas is an optional layout. Its nodes can be dragged with a pointer or focused and moved with the arrow keys. Select a node's title/progress control to expand or collapse its details; use the discreet notes button to open its attached notes drawer. In the Collapsed dashboard, the same button expands job details with the fourth Notes panel. Use the Canvas controls to zoom, reset the view, or auto-arrange all nodes; Ctrl+mouse wheel zooms and dragging the empty surface pans. Node positions and zoom are saved in the webview's local preferences. Canvas currently shows jobs independently; connectors and job relationships are not modeled.
 
-Collapsed dashboard shows live running, completed, failed, and active totals above compact job rows, with recent timestamped job events in a side panel. Select a total to filter the job list; select a row's details control to expand its panels. The former standalone Collapsed mode has been replaced by this dashboard. The `layout connected` command remains as an alias for `layout collapsed`.
+Collapsed is the default dashboard layout, showing live running, completed, failed, and active totals above compact job rows, with recent timestamped job events in a side panel. Select a total to filter the job list; select a row's details control to expand its panels. The `layout connected` command is an alias for `layout collapsed`.
 
 Per-job notes are saved by job ID and the Workspace Note is saved separately in the webview's local storage. Enable or hide the global Workspace Note from Preferences; its content is preserved when hidden. These notes stay on the local machine and are not included in execution snapshots.
 
