@@ -43,7 +43,38 @@ function jobDetails(j,notesDrawer=false){
   const events=(j.events||[]).slice(-6).map(e=>escapeHTML(e.kind+': '+e.message)).join('\n');
   const artifacts=(j.artifacts||[]).map(artifact=>`<div class="artifact-row"><span title="${escapeHTML(artifact)}">${escapeHTML(artifact)}</span><button class="artifact-action" aria-label="Open artifact ${escapeHTML(artifact)}" data-action="open" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Open</button><button class="artifact-action" aria-label="Reveal artifact ${escapeHTML(artifact)}" data-action="reveal" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Reveal</button></div>`).join('');
   const notesOpen=notesExpanded.has(j.id),notes=jobNotesPane(j);
-  const panels=`<div class="panels"><div class="pane"><h3>TASK / OVERVIEW</h3>${metric('Script',j.name)}${show('started','Started',j.started||'—')}${show('ended','Ended',j.ended||'—')}${show('runtime','Runtime',j.runtime+' s')}${show('cpu','CPU',j.cpu+' %')}${show('taskmem','Task memory',j.memory_mb+' MB')}${show('systemmem','System memory','Not collected')}</div><div class="pane"><h3>WORKING PARTS</h3>${metric('Stage',j.stage)}${metric('Progress',j.progress+'%')}<div class="bar"><i style="width:${Math.max(0,Math.min(100,Number(j.progress)||0))}%"></i></div>${m.includes('events')?`<div class="logs">${events||'Waiting for events…'}</div>`:''}</div><div class="pane"><h3>OUTPUT / RESULTS</h3>${show('quality','Quality',j.quality==null?'Not evaluated':j.quality+'%')}${metric('Exit code',j.exit_code??'—')}${m.includes('output')?`<div class="logs">${output||'Awaiting output…'}</div>`:''}${artifacts?`<div class="artifact-list"><h4>ARTIFACTS</h4>${artifacts}</div>`:''}</div>${!notesDrawer&&notesOpen?notes:''}</div>`;
+  const currentStageElapsed=stageElapsed(j.stage_started);
+  const stageTimingsHtml=Object.entries(j.stage_timings||{}).map(([stageName,secs])=>
+    `<div class="stage-timing"><span>${escapeHTML(stageName)}</span><span>${Number(secs).toFixed(1)}s</span></div>`
+  ).join('');
+  const panels=`<div class="panels">
+    <div class="pane"><h3>TASK / OVERVIEW</h3>
+      ${metric('Script',j.name)}
+      ${show('started','Started',j.started||'—')}
+      ${show('ended','Ended',j.ended||'—')}
+      ${show('runtime','Runtime',formatRuntime(j.runtime))}
+      ${j.eta_seconds!=null?metric('ETA',formatEta(j.eta_seconds)+' remaining'):''}
+      ${j.historical_avg_seconds!=null?metric('Avg (hist)',formatRuntime(j.historical_avg_seconds)):''}
+      ${show('cpu','CPU',j.cpu+' %')}
+      ${show('taskmem','Task memory',j.memory_mb+' MB')}
+      ${show('systemmem','System memory','Not collected')}
+    </div>
+    <div class="pane"><h3>WORKING PARTS</h3>
+      ${metric('Stage',j.stage||'—')}
+      ${currentStageElapsed!=null?metric('Stage time',formatRuntime(currentStageElapsed)):''}
+      ${metric('Progress',(j.progress??0)+'%')}
+      <div class="bar"><i style="width:${Math.max(0,Math.min(100,Number(j.progress)||0))}%"></i></div>
+      ${stageTimingsHtml?`<div class="stage-timings">${stageTimingsHtml}</div>`:''}
+      ${m.includes('events')?`<div class="logs">${events||'Waiting for events…'}</div>`:''}
+    </div>
+    <div class="pane"><h3>OUTPUT / RESULTS</h3>
+      ${show('quality','Quality',j.quality==null?'Not evaluated':j.quality+'%')}
+      ${metric('Exit code',j.exit_code??'—')}
+      ${m.includes('output')?`<div class="logs">${output||'Awaiting output…'}</div>`:''}
+      ${artifacts?`<div class="artifact-list"><h4>ARTIFACTS</h4>${artifacts}</div>`:''}
+    </div>
+    ${!notesDrawer&&notesOpen?notes:''}
+  </div>`;
   return panels+(notesDrawer&&notesOpen?`<section class="job-note-drawer">${notes}</section>`:'');
 }
 function canvasPosition(job,index){
@@ -92,6 +123,17 @@ function formatRuntime(seconds){
   const total=Math.max(0,Math.floor(Number(seconds)||0));
   const hours=Math.floor(total/3600),minutes=Math.floor(total%3600/60),remainder=total%60;
   return hours?`${hours}:${String(minutes).padStart(2,'0')}:${String(remainder).padStart(2,'0')}`:`${String(minutes).padStart(2,'0')}:${String(remainder).padStart(2,'0')}`;
+}
+function formatEta(seconds){
+  if(seconds==null||!Number.isFinite(seconds)||seconds<0)return '—';
+  if(seconds<60)return Math.ceil(seconds)+'s';
+  return formatRuntime(seconds);
+}
+function stageElapsed(stageStarted){
+  if(!stageStarted)return null;
+  const start=Date.parse(stageStarted);
+  if(Number.isNaN(start))return null;
+  return (Date.now()-start)/1000;
 }
 function renderJobs(){
   const el=$('jobs');
@@ -314,6 +356,49 @@ function setupMenus(){
   $('show-workspace-note').onchange=e=>{prefs.showWorkspaceNote=e.target.checked;apply()};
   $('workspace-note-text').value=workspaceNote;
   $('workspace-note-text').oninput=e=>{workspaceNote=e.target.value;saveNotes()};
+  // Max concurrent + session controls
+  const concurrentInput=$('max-concurrent');
+  if(concurrentInput){
+    concurrentInput.oninput=e=>{
+      const v=Number(e.target.value);
+      $('concurrent-val').textContent=v;
+    };
+    concurrentInput.onchange=async e=>{
+      if(!bridgeReady)return;
+      try{
+        const r=await window.pywebview.api.set_max_concurrent(Number(e.target.value));
+        $('concurrent-val').textContent=r.max_concurrent;
+        log('Max concurrent set to '+r.max_concurrent);
+      }catch(err){log('Error: '+(err.message||err))}
+    };
+  }
+  const btnSave=$('btn-session-save');
+  if(btnSave)btnSave.onclick=async()=>{
+    if(!bridgeReady){log('Bridge not ready');return}
+    try{
+      const name=prompt('Session name (optional):')||null;
+      const r=await window.pywebview.api.save_session(name);
+      log(`Session saved: ${r.name} (${r.jobs} jobs)`);
+    }catch(err){log('Error: '+(err.message||err))}
+  };
+  const btnList=$('btn-session-list');
+  if(btnList)btnList.onclick=async()=>{
+    if(!bridgeReady){log('Bridge not ready');return}
+    try{
+      const sessions=await window.pywebview.api.list_sessions();
+      log(sessions.length?sessions.map(s=>`${s.name} · ${s.jobs} jobs · ${s.saved_at||''}`).join(' | '):'No saved sessions');
+    }catch(err){log('Error: '+(err.message||err))}
+  };
+  const btnClear=$('btn-session-clear');
+  if(btnClear)btnClear.onclick=async()=>{
+    if(!bridgeReady){log('Bridge not ready');return}
+    if(!confirm('Clear all jobs from the workspace?'))return;
+    try{
+      await window.pywebview.api.clear_session();
+      log('Workspace cleared');
+      await poll();
+    }catch(err){log('Error: '+(err.message||err))}
+  };
 }
 function parseCommandLine(line){
   const tokens=[];
@@ -338,7 +423,7 @@ async function command(line){
   log('> '+line);
   try{
     const [verb,...args]=parseCommandLine(line);
-    if(verb==='help')log('Commands: help, catalog [reload], run <command> [arguments...], list, layout collapsed|canvas, stop <id>, clear (connected is an alias for collapsed)');
+    if(verb==='help')log('Commands: help, catalog [reload], run <cmd> [args...], list, layout collapsed|canvas, stop <id>, clear, session save [name]|load <name>|list|clear, history [script], compare <script>, concurrent [N]');
     else if(verb==='catalog'){
       if(args.length>1||(args.length===1&&args[0]!=='reload'))throw Error('Usage: catalog [reload]');
       if(args.includes('reload'))await refreshCatalog(true);
@@ -360,6 +445,45 @@ async function command(line){
       const layout=args[0]==='connected'?'collapsed':args[0];
       setLayout(layout);log('Layout: '+layout);
     }else if(verb==='clear'){history=[];renderHistory()}
+    else if(verb==='session'){
+      const sub=args[0];
+      if(sub==='save'){
+        const name=args[1]||null;
+        const r=await window.pywebview.api.save_session(name);
+        log(`Session saved: ${r.name} (${r.jobs} jobs)`);
+      }else if(sub==='load'){
+        if(!args[1])throw Error('Usage: session load <name>');
+        const r=await window.pywebview.api.load_session(args[1]);
+        log(`Session loaded: ${r.name||args[1]} (${r.jobs} jobs)`);
+        await poll();
+      }else if(sub==='list'){
+        const sessions=await window.pywebview.api.list_sessions();
+        log(sessions.length?sessions.map(s=>`${s.name} · ${s.jobs} jobs · ${s.saved_at||''}`).join(' | '):'No saved sessions');
+      }else if(sub==='clear'){
+        await window.pywebview.api.clear_session();
+        log('Workspace cleared');
+        await poll();
+      }else throw Error('Usage: session save [name] | load <name> | list | clear');
+    }else if(verb==='history'){
+      const script=args[0]||null;
+      const records=await window.pywebview.api.get_history(script,20);
+      if(!records.length){log('No history records'+(script?' for '+script:''));return}
+      log(records.map(r=>`${r.name} ${r.runtime}s peak=${r.peak_memory_mb??'—'}MB q=${r.quality??'—'} ${r.ended||''}`).join(' | '));
+    }else if(verb==='compare'){
+      if(!args[0])throw Error('Usage: compare <script>');
+      const data=await window.pywebview.api.compare_script(args[0],10);
+      const runs=data.runs||[];
+      log(`${data.name}: avg=${data.average_runtime??'—'}s over ${data.count} runs`);
+      if(runs.length)log(runs.map(r=>`${r.runtime}s mem=${r.peak_memory_mb??'—'} ${r.ended||''}`).join(' · '));
+    }else if(verb==='concurrent'){
+      if(!args[0]){
+        const n=await window.pywebview.api.get_max_concurrent();
+        log('Max concurrent: '+n);
+      }else{
+        const r=await window.pywebview.api.set_max_concurrent(Number(args[0]));
+        log('Max concurrent set to '+r.max_concurrent);
+      }
+    }
     else log('Unknown command. Type help.');
   }catch(error){log('Error: '+(error.message||error))}
 }
@@ -515,7 +639,18 @@ $('command').addEventListener('keydown',e=>{
 $('run-demo').onclick=()=>bridgeReady&&scriptSelect.value?command('run '+scriptSelect.value):log(bridgeReady?'No runnable scripts found. Add ACW metadata to a script.':'Launch with python main.py');
 function refreshClock(){$('clock').textContent=new Date().toLocaleString()};refreshClock();setInterval(refreshClock,1000);setupMenus();apply();
 async function poll(){if(!bridgeReady||busy)return;busy=true;try{jobs=await window.pywebview.api.jobs();if(!(prefs.layout==='canvas'&&canvasDragging))renderJobs();if(!jobs.length)$('jobs').querySelector('.empty').textContent='No executions yet. Select a script above or type run <command>.';$('connection').textContent=`Local Python connected · ${jobs.filter(j=>j.status==='running').length} running · ${jobs.length} total` }catch(e){$('connection').textContent='Bridge error: '+e}finally{busy=false}}
-window.addEventListener('pywebviewready',()=>{bridgeReady=true;log('Python bridge connected');refreshCatalog().catch(e=>log('Catalog error: '+(e.message||e)));poll();setInterval(poll,850)});
+window.addEventListener('pywebviewready',async()=>{
+  bridgeReady=true;
+  log('Python bridge connected');
+  try{
+    const n=await window.pywebview.api.get_max_concurrent();
+    const input=$('max-concurrent');
+    if(input){input.value=n;$('concurrent-val').textContent=n}
+  }catch{}
+  refreshCatalog().catch(e=>log('Catalog error: '+(e.message||e)));
+  poll();
+  setInterval(poll,850);
+});
 setTimeout(()=>{if(!bridgeReady)$('connection').textContent='Open this file through python main.py (not a regular browser tab)'},2500);
 
 const backgroundStyle=document.createElement('style');

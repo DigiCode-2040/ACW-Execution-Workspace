@@ -33,7 +33,12 @@ These captures show an earlier UI and do not reflect the current layout and spac
 - Four themes (Cyan Cyberpunk default, Quantum Violet, Matrix Green, Industrial Amber)
 - Glass opacity, edge glow, compact-density preferences (saved locally in the embedded webview)
 - Job status, elapsed time, CPU and task memory via `psutil`, stdout, stage events, progress, and optional quality
-- Job cancellation, limited concurrency, and JSON execution snapshots in `runs/`
+- Progress-based **ETA** and historical average duration per script, shown on job cards
+- Per-stage timing when scripts emit structured stage events
+- Configurable concurrency limit (default 4) with a FIFO queue for overflow jobs
+- Workspace session auto-save on exit and restore on next launch; named session save/load/clear
+- Lightweight run history index (`runs/history.jsonl`) with `history` and `compare` commands
+- Job cancellation (including queued jobs), JSON execution snapshots in `runs/`
 - Safe artifact Open/Reveal actions for reported paths under the project or declared output folders
 - Up/Down terminal command history and labeled, keyboard-accessible toolbar menus
 
@@ -75,6 +80,14 @@ layout collapsed
 layout canvas
 stop <job-id>
 clear
+session save [name]
+session load <name>
+session list
+session clear
+history [script]
+compare <script>
+concurrent
+concurrent <N>
 ```
 
 Canvas is an optional layout. Its nodes can be dragged with a pointer or focused and moved with the arrow keys. Select a node's title/progress control to expand or collapse its details; use the discreet notes button to open its attached notes drawer. In the Collapsed dashboard, the same button expands job details with the fourth Notes panel. Use the Canvas controls to zoom, reset the view, or auto-arrange all nodes; Ctrl+mouse wheel zooms and dragging the empty surface pans. Node positions and zoom are saved in the webview's local preferences. Canvas currently shows jobs independently; connectors and job relationships are not modeled.
@@ -87,7 +100,14 @@ Scripts in the catalog are discovered when the app starts. After saving, adding,
 
 Arguments are passed as a list directly to the approved Python script; ACW does not invoke a shell. Each script decides which arguments it accepts. For example, the organizer's default target is `~/Downloads`; it accepts `--target <folder>` and `--dry-run`.
 
-`run demo` and `run quality` start illustrative local example workflows. At most four jobs run concurrently. The terminal accepts up to 128 arguments with a combined length of 30,000 characters; each script is responsible for parsing and validating its own arguments. Job runtime, process CPU, and process memory readings are real measurements when `psutil` is available. CPU sampling is approximate. "System memory" is not currently collected and is labeled accordingly in the UI.
+`run demo` and `run quality` start illustrative local example workflows. The concurrency limit defaults to 4 and is configurable (`concurrent <N>` or the Preferences slider). When the limit is reached, additional jobs enter a FIFO queue and start automatically when a slot opens. The terminal accepts up to 128 arguments with a combined length of 30,000 characters; each script is responsible for parsing and validating its own arguments. Job runtime, process CPU, and process memory readings are real measurements when `psutil` is available. CPU sampling is approximate. "System memory" is not currently collected and is labeled accordingly in the UI.
+
+### Sessions and history
+
+- On exit (and after job completions), the current job list is written to `runs/last_session.json` and restored on the next launch. Jobs that were running or queued are marked `interrupted`.
+- Named sessions can be saved under `sessions/` via `session save [name]` or the Preferences button. Load with `session load <name>` (refuses while jobs are active). List with `session list`. Clear the workspace with `session clear`.
+- Successful runs append a compact record to `runs/history.jsonl` (script name, duration, peak memory, exit code, quality, timestamp, stage timings). Use `history [script]` and `compare <script>` to inspect recent runs and averages.
+- Job cards show a progress-based **ETA** when progress &gt; 0, and a historical average duration when prior successful runs exist for that script.
 
 ## Project structure
 
@@ -101,7 +121,7 @@ acw-local/
 ├── acw/
 │   ├── __init__.py
 │   ├── api.py                # Exposed bridge methods
-│   └── engine.py             # Job registry, subprocesses, telemetry
+│   └── engine.py             # Job registry, subprocesses, telemetry, sessions, history
 ├── ui/
 │   ├── index.html            # HTML and CSS frontend
 │   └── app.js                # UI behavior and pywebview bridge calls
@@ -109,7 +129,11 @@ acw-local/
 │   ├── demo_pipeline.py
 │   ├── quality_check.py
 │   └── organize_downloads.py
-├── runs/                     # Created at startup; generated JSON snapshots
+├── runs/                     # Created at startup
+│   ├── <job-id>.json         # Per-job snapshots
+│   ├── last_session.json     # Auto-restored workspace
+│   └── history.jsonl         # Append-only run index
+├── sessions/                 # Named workspace snapshots (created on first save)
 └── screenshots/              # UI captures referenced above
 ```
 
@@ -139,9 +163,9 @@ print('ACW_EVENT:' + json.dumps({
 }), flush=True)
 ```
 
-Any other stdout line is treated as ordinary process output. The engine retains up to 250 output lines and 250 events per job in memory. When starting a job pushes the in-memory history past 100 records, it prunes one record that is not queued or running; the history can exceed 100 if no such record is available. When a launched process exits, its job snapshot is written to `runs/<job-id>.json` (ignored by Git). Snapshots are for local inspection and are not reloaded into the UI on the next launch.
+Any other stdout line is treated as ordinary process output. The engine retains up to 250 output lines and 250 events per job in memory. When a launched process exits, its job snapshot is written to `runs/<job-id>.json` (ignored by Git). Successful completions also append a compact record to `runs/history.jsonl` for averages and comparison.
 
-Scripts may emit progress updates while they run; when a script exits successfully, the engine marks its stage as `Complete` and progress as 100%.
+Scripts may emit progress updates while they run; when a script exits successfully, the engine marks its stage as `Complete` and progress as 100%. Changing the `stage` value records the duration of the previous stage for display on the job card.
 
 To expose an artifact path for safe Open/Reveal actions, scripts can emit it in a structured event:
 
@@ -163,20 +187,23 @@ Relative artifact paths are resolved from the project root. For an output direct
 ## Architecture and limitations
 
 - **No listening service:** Python and the HTML frontend communicate through pywebview's local JavaScript API bridge.
-- **Concurrent execution:** Jobs run as subprocesses in background threads, so the UI remains responsive.
-- **Local persistence:** Preferences and notes use webview localStorage; exited-job snapshots are JSON files under `runs/` and are not restored into the UI.
+- **Concurrent execution:** Jobs run as subprocesses in background threads, so the UI remains responsive. A configurable concurrency limit (default 4) is enforced; overflow jobs wait in a FIFO queue.
+- **Local persistence:** Preferences and notes use webview localStorage. The job list is auto-saved to `runs/last_session.json` and restored on the next launch. Named sessions live under `sessions/`. Successful run metrics are appended to `runs/history.jsonl`.
 - **Security boundary:** This is a local desktop app, not a sandbox. Scripts can access resources available to the current OS user. Do not add untrusted scripts to the catalog.
-- **Cancellation:** Attempts to terminate the job and child processes. Some subprocess trees may require additional platform-specific cleanup.
-- **Telemetry:** Best-effort CPU/memory sampling, not a full tracing or profiling system. Stage timing, per-stage resources, input versioning, file verification, historical comparison, and multi-step workflow DAGs are future work.
+- **Cancellation:** Attempts to terminate the job and child processes; queued jobs can be removed without starting. Some subprocess trees may require additional platform-specific cleanup.
+- **Telemetry:** Best-effort CPU/memory sampling and progress-based ETA, not a full tracing or profiling system. Stage timing is derived from structured events. Resource graphs, input versioning, file verification, and multi-step workflow DAGs remain future work.
 - **Platform testing:** Behavior can vary across desktop webview engines; validate on your target OS before relying on it for critical jobs.
 
 ## Roadmap
 
 - [ ] Configurable script definitions and argument schemas
 - [x] Job filtering and search
-- [ ] Stage-level timing and metrics, resource graphs, and comparison views
+- [x] Stage-level timing and historical comparison (`history` / `compare`)
 - [x] Safe artifact Open/Reveal actions for reported artifacts
-- [ ] More robust process-tree cancellation, timeouts, and job persistence
+- [x] Job list persistence across launches and named workspace sessions
+- [x] Configurable concurrency with queue
+- [ ] More robust process-tree cancellation and timeouts
+- [ ] Resource graphs and richer comparison views
 - [ ] Workflow dependencies and agent/tool-call telemetry
 - [ ] Automated tests and desktop packaging
 
