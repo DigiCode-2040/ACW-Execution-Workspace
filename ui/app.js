@@ -1,7 +1,7 @@
 'use strict';
 const defaults={theme:'cyan',layout:'collapsed',historyCount:5,opacity:78,glow:true,compact:false,canvasZoom:1,canvasPositions:{},selectedScript:null,monitors:['cpu','systemmem','taskmem','started','ended','runtime','events','quality']};
 let prefs={...defaults}, jobs=[], history=[], catalogEntries=[], bridgeReady=false, busy=false;
-let commandHistory=[],commandHistoryIndex=0,commandDraft='',jobStatusFilter='all',jobSearch='';
+let commandHistory=[],commandHistoryIndex=0,commandDraft='',jobStatusFilter='all',jobTimeFilter='all',jobSearch='';
 let auditCurrentJobs=[],auditCurrentIds=new Set(),auditPriorJobs=[],auditPriorCount=0,auditPriorWarnings=0,auditTargetId=null;
 const auditDetailsOpen=new Set();
 try{prefs={...defaults,...JSON.parse(localStorage.getItem('acw.preferences')||'{}')}}catch{}
@@ -239,10 +239,14 @@ function renderJobs(){
   const previousScroll=prefs.layout==='canvas'?{left:el.scrollLeft,top:el.scrollTop}:null;
   el.className='jobs '+(prefs.layout==='collapsed'?'connected':prefs.layout);
   el.classList.toggle('has-expanded',prefs.layout==='canvas'&&canvasExpanded.size>0);
+  const now=Date.now();
   const matches=jobs.filter(job=>{
     const statusMatches=jobStatusFilter==='all'||(jobStatusFilter==='active'?['queued','running','cancelling'].includes(job.status):job.status===jobStatusFilter);
+    const startedAt=Date.parse(job.started||'');
+    const ageLimit=jobTimeFilter==='hour'?60*60*1000:jobTimeFilter==='day'?24*60*60*1000:null;
+    const timeMatches=ageLimit===null||(Number.isFinite(startedAt)&&startedAt<=now&&now-startedAt<=ageLimit);
     const searchable=[job.label,job.name,job.id,job.status,job.stage,...(job.events||[]).filter(event=>event.kind!=='output').map(event=>event.message),...(job.artifacts||[])].join(' ').toLowerCase();
-    return statusMatches&&searchable.includes(jobSearch.toLowerCase());
+    return statusMatches&&timeMatches&&searchable.includes(jobSearch.toLowerCase());
   });
   $('job-filter-count').textContent=`${matches.length} / ${jobs.length}`;
   $('job-filter-count').setAttribute('aria-label',`${matches.length} of ${jobs.length} jobs shown`);
@@ -545,7 +549,7 @@ async function refreshCatalog(reload=false){
   select.onchange=()=>{prefs.selectedScript=select.value||null;save();$('catalog-description').textContent=catalogEntries.find(entry=>entry.name===select.value)?.description||'';$('edit-script').disabled=!select.value};
   $('jobs').querySelector('.empty')?.replaceChildren(document.createTextNode('No executions yet. Select a script above or type run <command>.'));
 }
-const jobFilters=document.createElement('div');jobFilters.id='job-filters';jobFilters.innerHTML='<strong class="jobs-title">JOBS</strong><select id="job-status-filter" aria-label="Filter jobs by status"><option value="all">All statuses</option><option value="active">Active</option><option value="queued">Queued</option><option value="running">Running</option><option value="cancelling">Cancelling</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select><input id="job-search" type="search" aria-label="Search jobs" placeholder="Search jobs and artifacts"><span id="job-filter-count" class="subtle" aria-live="polite">0 of 0</span>';document.querySelector('.workspace-head').after(jobFilters);$('job-status-filter').onchange=e=>{jobStatusFilter=e.target.value;renderJobs()};$('job-search').oninput=e=>{jobSearch=e.target.value.trim();renderJobs()};
+const jobFilters=document.createElement('div');jobFilters.id='job-filters';jobFilters.innerHTML='<strong class="jobs-title">JOBS</strong><select id="job-status-filter" aria-label="Filter jobs by status"><option value="all">All statuses</option><option value="active">Active</option><option value="queued">Queued</option><option value="running">Running</option><option value="cancelling">Cancelling</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select><select id="job-time-filter" aria-label="Filter jobs by start time"><option value="all">Any time</option><option value="hour">Started in last hour</option><option value="day">Started in last 24 hours</option></select><input id="job-search" type="search" aria-label="Search jobs" placeholder="Search jobs and artifacts"><span id="job-filter-count" class="subtle" aria-live="polite">0 of 0</span>';document.querySelector('.workspace-head').after(jobFilters);$('job-status-filter').onchange=e=>{jobStatusFilter=e.target.value;renderJobs()};$('job-time-filter').onchange=e=>{jobTimeFilter=e.target.value;renderJobs()};$('job-search').oninput=e=>{jobSearch=e.target.value.trim();renderJobs()};
 function setPage(page){
   const activePage=typeof page==='boolean'?(page?'manage':'execution'):page;
   $('execution-page').hidden=activePage!=='execution';
