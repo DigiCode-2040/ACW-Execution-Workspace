@@ -1,48 +1,123 @@
 'use strict';
-const defaults={theme:'cyan',layout:'collapsed',historyCount:5,opacity:78,glow:true,compact:false,showWorkspaceNote:false,canvasZoom:1,canvasPositions:{},monitors:['cpu','systemmem','taskmem','started','ended','runtime','events','quality','output']};
+const defaults={theme:'cyan',layout:'collapsed',historyCount:5,opacity:78,glow:true,compact:false,canvasZoom:1,canvasPositions:{},selectedScript:null,monitors:['cpu','systemmem','taskmem','started','ended','runtime','events','quality']};
 let prefs={...defaults}, jobs=[], history=[], catalogEntries=[], bridgeReady=false, busy=false;
 let commandHistory=[],commandHistoryIndex=0,commandDraft='',jobStatusFilter='all',jobSearch='';
+let auditCurrentJobs=[],auditCurrentIds=new Set(),auditPriorJobs=[],auditPriorCount=0,auditPriorWarnings=0,auditTargetId=null;
 try{prefs={...defaults,...JSON.parse(localStorage.getItem('acw.preferences')||'{}')}}catch{}
 if(!['collapsed','canvas'].includes(prefs.layout))prefs.layout='collapsed';
 if(!prefs.canvasPositions||typeof prefs.canvasPositions!=='object')prefs.canvasPositions={};
 if(!Number.isFinite(prefs.canvasZoom))prefs.canvasZoom=1;
 prefs.canvasZoom=Math.max(.5,Math.min(1.5,prefs.canvasZoom));
-if(typeof prefs.showWorkspaceNote!=='boolean')prefs.showWorkspaceNote=false;
-let canvasExpanded=new Set(),connectedExpanded=new Set(),notesExpanded=new Set(),canvasDragging=false,notesSaveErrorLogged=false;
+let canvasExpanded=new Set(),connectedExpanded=new Set(),canvasDragging=false;
 const $=id=>document.getElementById(id);
 const brandLogo=document.querySelector('.logo');
 brandLogo.src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEYAAAA+CAMAAABe1z3LAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAABa1BMVEUAAAAADBgADxgADxkAEBkAERoAEhsAExwAFB0AFR4AFh8AFyAAFyEAFyIAFyMAFyQAFyUAFyYAFycAFygAFykAFyoAFysAFywAFy0AFy4AFy8AFzAAFzEAFzIAFzMAFzQAFzUAFzYAFzcAFzgAFzkAFzoAFzsAFzwAFz0AFz4AFz8AF0AAF0EAF0IAF0MAF0QAF0UAF0YAF0cAF0gAF0kAF0oAF0sAF0wAF00AF04AF08AF1AAF1EAF1IAF1MAF1QAF1UAF1YAF1cAF1gAF1kAF1oAF1sAF1wAF10AF14AF18AF2AAF2EAF2IAF2MAF2QAF2UAF2YAF2cAF2gAF2kAF2oAF2sAF2wAF20AF24AF28AF3AAF3EAF3MAF3QAF3UAF3YAF3cAF3gAF3kAF3oAF3sAF3wAF30AF34AF38AGIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAF38AGIAAAAAFzkAFz0AFz4AFz8AF0AAF0EAF0IAF0MAF0QAF0UAF0YAF0cAF0gAF0kAF0oAF0sAF0wAF00AF04AF08AF1AAF1EAF1IAF1MAF1QAF1UAF1YAF1cAF1gAF1kAF1oAF1sAF1wAF10AF14AF18AF2AAF2EAF2IAF2MAF2QAF2UAF2YAF2cAF2gAF2kAF2oAF2sAF2wAF20AF24AF28AF3AAF3EAF3MAF3QAF3UAF3YAF3cAF3gAF3kAF3oAF3sAF3wAF30AF34AF38AAAAAFzkAFz0AFz4AFz8AF0AAF0EAF0IAF0MAF0QAF0UAF0YAF0cAF0gAF0kAF0oAF0sAF0wAF00AF04AF08AF1AAF1EAF1IAF1MAF1QAF1UAF1YAF1cAF1gAF1kAF1oAF1sAF1wAF10AF14AF18AF2AAF2EAF2IAF2MAF2QAF2UAF2YAF2cAF2gAF2kAF2oAF2sAF2wAF20AF24AF28AF3AAF3EAF3IAF3MAF3QAF3UAF3YAF3cAF3gAF3kAF3oAF3sAF3wAF30AF34AF38AAAAA';
 const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 brandLogo.src='acw-logo.png';
-let jobNotes={},workspaceNote='';
-try{
-  const savedNotes=JSON.parse(localStorage.getItem('acw.notes')||'{}');
-  if(savedNotes&&typeof savedNotes==='object'&&!Array.isArray(savedNotes)){
-    jobNotes=savedNotes.jobs&&typeof savedNotes.jobs==='object'&&!Array.isArray(savedNotes.jobs)
-      ?Object.fromEntries(Object.entries(savedNotes.jobs).filter(([,note])=>typeof note==='string'))
-      :{};
-    workspaceNote=typeof savedNotes.workspace==='string'?savedNotes.workspace:'';
-  }
-}catch(error){console.error('Unable to load saved notes:',error)}
-const monLabels={cpu:'CPU utilization',systemmem:'System memory*',taskmem:'Task memory',started:'Started',ended:'Ended',runtime:'Runtime',events:'Events',quality:'Quality',output:'Output'};
+const monLabels={cpu:'CPU utilization',systemmem:'System memory*',taskmem:'Task memory',started:'Started',ended:'Ended',runtime:'Runtime',events:'Events',quality:'Quality'};
 const statusSymbols={running:'●',queued:'○',cancelling:'Ⅱ',completed:'✓',failed:'!',cancelled:'—'};
 function statusSymbol(status){return statusSymbols[status]||'·'}
 const palettes={cyan:['#4ee6ef','#071019','#112736'],violet:['#bca3ff','#100d1c','#29203b'],green:['#78e4ac','#091712','#16362b'],amber:['#ffc36c','#1a130b','#3a2b1b']};
 function save(){try{localStorage.setItem('acw.preferences',JSON.stringify(prefs))}catch{}}
-function saveNotes(){try{localStorage.setItem('acw.notes',JSON.stringify({jobs:jobNotes,workspace:workspaceNote}));notesSaveErrorLogged=false}catch(error){if(!notesSaveErrorLogged){log('Unable to save notes: '+(error.message||error));notesSaveErrorLogged=true}}}
-function apply(){const [accent,bg,surface]=palettes[prefs.theme]||palettes.cyan;const r=document.documentElement.style;r.setProperty('--accent',accent);r.setProperty('--bg',bg);r.setProperty('--surface',surface);r.setProperty('--glow',prefs.glow?'1':'0');r.setProperty('--glass',prefs.opacity+'%');r.setProperty('--surface',`color-mix(in srgb, ${surface} ${prefs.opacity}%, transparent)`);document.body.classList.toggle('compact',prefs.compact);document.body.classList.toggle('connected-layout',prefs.layout==='collapsed');$('jobs').className='jobs '+(prefs.layout==='collapsed'?'connected':prefs.layout);document.querySelectorAll('[name=layout]').forEach(input=>input.checked=input.value===prefs.layout);$('theme').value=prefs.theme;$('history-count').value=prefs.historyCount;$('hist-val').textContent=prefs.historyCount;$('opacity').value=prefs.opacity;$('opacity-val').textContent=prefs.opacity+'%';$('glow').checked=prefs.glow;$('compact').checked=prefs.compact;$('show-workspace-note').checked=prefs.showWorkspaceNote;$('workspace-note').hidden=!prefs.showWorkspaceNote;renderHistory();renderJobs();save()}
+function apply(){const [accent,bg,surface]=palettes[prefs.theme]||palettes.cyan;const r=document.documentElement.style;r.setProperty('--accent',accent);r.setProperty('--bg',bg);r.setProperty('--surface',surface);r.setProperty('--glow',prefs.glow?'1':'0');r.setProperty('--glass',prefs.opacity+'%');r.setProperty('--surface',`color-mix(in srgb, ${surface} ${prefs.opacity}%, transparent)`);document.body.classList.toggle('compact',prefs.compact);document.body.classList.toggle('connected-layout',prefs.layout==='collapsed');$('jobs').className='jobs '+(prefs.layout==='collapsed'?'connected':prefs.layout);document.querySelectorAll('[name=layout]').forEach(input=>input.checked=input.value===prefs.layout);$('theme').value=prefs.theme;$('history-count').value=prefs.historyCount;$('hist-val').textContent=prefs.historyCount;$('opacity').value=prefs.opacity;$('opacity-val').textContent=prefs.opacity+'%';$('glow').checked=prefs.glow;$('compact').checked=prefs.compact;renderHistory();renderJobs();save()}
 function log(s){history.push({time:new Date().toLocaleTimeString(),text:s});history=history.slice(-200);renderHistory()}
 function renderHistory(){$('history').innerHTML=history.slice(-prefs.historyCount).map(x=>`<div class="entry"><time>${escapeHTML(x.time)}</time><span>${escapeHTML(x.text)}</span></div>`).join('')||'<span class="subtle">Ready. Type help for commands.</span>'}
 function metric(label,value){return `<div class="metric"><span>${escapeHTML(label)}</span><span>${escapeHTML(value)}</span></div>`}
-function jobNotesPane(j){
-  return `<div class="pane job-note"><h3>NOTES</h3><textarea class="job-note-text" data-job-note="${escapeHTML(j.id)}" rows="5" spellcheck="false" aria-label="Notes for ${escapeHTML(j.label)}" placeholder="Add notes for this job…">${escapeHTML(jobNotes[j.id]||'')}</textarea></div>`;
+function auditRecordMarkup(job){
+  const id=job.id||job.job_id||'unknown';
+  const status=job.status||'stored';
+  const output=Array.isArray(job.output)?job.output.join('\n'):String(job.output||'');
+  const events=Array.isArray(job.events)?job.events.filter(event=>event&&event.kind!=='output').map(event=>`${event.time||''} ${event.kind||'event'}: ${event.message||''}`.trim()).join('\n'):'';
+  const artifacts=Array.isArray(job.artifacts)?job.artifacts:[];
+  const details=[
+    output?`<section class="audit-detail"><h3>Captured output</h3><pre>${escapeHTML(output)}</pre></section>`:'',
+    events?`<section class="audit-detail"><h3>Events and errors</h3><pre>${escapeHTML(events)}</pre></section>`:'',
+    artifacts.length?`<section class="audit-detail"><h3>Reported artifacts and paths</h3><ul class="audit-paths">${artifacts.map(path=>`<li>${escapeHTML(path)}</li>`).join('')}</ul></section>`:'',
+    !output&&!events&&!artifacts.length?'<p class="subtle">This stored record has summary data only.</p>':''
+  ].join('');
+  return `<article class="audit-record"><div class="audit-record-head"><div><h2>${escapeHTML(job.label||job.name||'Unknown job')}</h2><div class="audit-record-meta"><span>${escapeHTML(job.name||'')}</span><span class="pill ${escapeHTML(status)}">${escapeHTML(status)}</span><span>ID ${escapeHTML(id)}</span></div></div></div><div class="audit-record-meta"><span>Started: ${escapeHTML(job.started||'—')}</span><span>Ended: ${escapeHTML(job.ended||'—')}</span><span>Runtime: ${escapeHTML(job.runtime==null?'—':formatRuntime(job.runtime))}</span><span>Exit code: ${escapeHTML(job.exit_code??'—')}</span></div><details${id===auditTargetId?' open':''}><summary>View stored details</summary>${details}</details></article>`;
 }
-function jobDetails(j,notesDrawer=false){
+function auditSearchMatches(job,query){
+  const terms=query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if(!terms.length)return true;
+  const content=JSON.stringify(job).toLocaleLowerCase();
+  return terms.every(term=>content.includes(term));
+}
+function renderAuditCurrent(){
+  const query=$('audit-current-search').value.trim();
+  const status=$('audit-current-status').value;
+  let matches=auditCurrentJobs.filter(job=>(status==='all'||job.status===status)&&auditSearchMatches(job,query));
+  if(auditTargetId)matches=matches.filter(job=>job.id===auditTargetId);
+  $('audit-current-results').innerHTML=matches.map(auditRecordMarkup).join('')||
+    `<div class="empty">${auditTargetId?'This job is not part of the current app session.':'No current-session jobs match these filters.'}</div>`;
+}
+async function refreshAuditCurrent(){
+  if(!bridgeReady)return;
+  const target=$('audit-current-results');
+  try{
+    auditCurrentJobs=await window.pywebview.api.audit_current_session();
+    auditCurrentIds=new Set(auditCurrentJobs.map(job=>job.id));
+    renderAuditCurrent();
+  }catch(error){
+    target.textContent='Unable to load current-session jobs: '+(error.message||error);
+  }
+}
+function renderAuditPrior(){
+  const results=$('audit-prior-results');
+  const status=$('audit-prior-filter-status').value;
+  const matches=auditPriorJobs.filter(job=>status==='all'||job.status===status);
+  results.innerHTML=matches.map(auditRecordMarkup).join('')||
+    '<div class="empty">No stored runs match this search.</div>';
+  $('audit-prior-status').textContent=`${matches.length} shown of ${auditPriorCount} matching stored run${auditPriorCount===1?'':'s'}${auditPriorWarnings?` · ${auditPriorWarnings} unreadable record(s) were skipped`:''}`;
+}
+function selectAuditView(view){
+  const current=view==='current';
+  $('audit-current-panel').hidden=!current;
+  $('audit-prior-panel').hidden=current;
+  document.querySelectorAll('[data-audit-view]').forEach(button=>
+    button.setAttribute('aria-pressed',String(button.dataset.auditView===view))
+  );
+}
+async function searchPriorAudit(query){
+  if(!bridgeReady)return;
+  const status=$('audit-prior-status');
+  const submit=$('audit-search-form').querySelector('button[type=submit]');
+  submit.disabled=true;
+  status.textContent='Searching stored runs…';
+  try{
+    const result=await window.pywebview.api.search_audit(query);
+    auditPriorJobs=result.jobs||[];
+    auditPriorCount=result.count||0;
+    auditPriorWarnings=result.warnings?.length||0;
+    renderAuditPrior();
+  }catch(error){
+    auditPriorJobs=[];
+    auditPriorCount=0;
+    auditPriorWarnings=0;
+    $('audit-prior-results').replaceChildren();
+    status.textContent='Unable to search stored runs: '+(error.message||error);
+  }finally{submit.disabled=false}
+}
+async function openJobAudit(jobId){
+  auditTargetId=jobId;
+  setPage('audit');
+  await refreshAuditCurrent();
+  if(auditCurrentIds.has(jobId)){
+    selectAuditView('current');
+    $('audit-current-search').value='';
+    $('audit-current-status').value='all';
+    renderAuditCurrent();
+    return;
+  }
+  selectAuditView('prior');
+  $('audit-prior-search').value=jobId;
+  await searchPriorAudit(jobId);
+}
+function jobDetails(j){
   const m=prefs.monitors,show=(k,label,val)=>m.includes(k)?metric(label,val):'';
-  const output=(j.output||[]).slice(-6).map(escapeHTML).join('\n');
-  const events=(j.events||[]).slice(-6).map(e=>escapeHTML(e.kind+': '+e.message)).join('\n');
-  const artifacts=(j.artifacts||[]).map(artifact=>`<div class="artifact-row"><span title="${escapeHTML(artifact)}">${escapeHTML(artifact)}</span><button class="artifact-action" aria-label="Open artifact ${escapeHTML(artifact)}" data-action="open" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Open</button><button class="artifact-action" aria-label="Reveal artifact ${escapeHTML(artifact)}" data-action="reveal" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Reveal</button></div>`).join('');
-  const notesOpen=notesExpanded.has(j.id),notes=jobNotesPane(j);
+  const events=(j.events||[]).filter(event=>event.kind!=='output').slice(-6).map(e=>escapeHTML(e.kind+': '+e.message)).join('\n');
+  const finished=['completed','failed','cancelled'].includes(j.status);
+  const artifacts=finished?(j.artifacts||[]).map(artifact=>`<div class="artifact-row"><span title="${escapeHTML(artifact)}">${escapeHTML(artifact)}</span><button class="artifact-action" aria-label="Open artifact ${escapeHTML(artifact)}" data-action="open" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Open</button><button class="artifact-action" aria-label="Reveal artifact ${escapeHTML(artifact)}" data-action="reveal" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Reveal</button></div>`).join(''):'';
   const currentStageElapsed=stageElapsed(j.stage_started);
   const stageTimingsHtml=Object.entries(j.stage_timings||{}).map(([stageName,secs])=>
     `<div class="stage-timing"><span>${escapeHTML(stageName)}</span><span>${Number(secs).toFixed(1)}s</span></div>`
@@ -67,15 +142,11 @@ function jobDetails(j,notesDrawer=false){
       ${stageTimingsHtml?`<div class="stage-timings">${stageTimingsHtml}</div>`:''}
       ${m.includes('events')?`<div class="logs">${events||'Waiting for events…'}</div>`:''}
     </div>
-    <div class="pane"><h3>OUTPUT / RESULTS</h3>
-      ${show('quality','Quality',j.quality==null?'Not evaluated':j.quality+'%')}
-      ${metric('Exit code',j.exit_code??'—')}
-      ${m.includes('output')?`<div class="logs">${output||'Awaiting output…'}</div>`:''}
-      ${artifacts?`<div class="artifact-list"><h4>ARTIFACTS</h4>${artifacts}</div>`:''}
+    <div class="pane"><h3>FINAL RESULTS</h3>
+      ${finished?`${show('quality','Quality',j.quality==null?'Not evaluated':j.quality+'%')}${metric('Exit code',j.exit_code??'—')}${artifacts?`<div class="artifact-list"><h4>ARTIFACTS</h4>${artifacts}</div>`:''}`:'<span class="subtle">Available when the job finishes.</span>'}
     </div>
-    ${!notesDrawer&&notesOpen?notes:''}
   </div>`;
-  return panels+(notesDrawer&&notesOpen?`<section class="job-note-drawer">${notes}</section>`:'');
+  return panels;
 }
 function canvasPosition(job,index){
   const saved=prefs.canvasPositions[job.id];
@@ -99,14 +170,12 @@ function renderConnectedOverview(){
   const counts={
     running:jobs.filter(job=>job.status==='running').length,
     completed:jobs.filter(job=>job.status==='completed').length,
-    failed:jobs.filter(job=>job.status==='failed').length,
-    active:jobs.filter(job=>['queued','running','cancelling'].includes(job.status)).length
+    failed:jobs.filter(job=>job.status==='failed').length
   };
   document.querySelectorAll('[data-total]').forEach(card=>{
     const key=card.dataset.total;
     card.querySelector('.total-value').textContent=counts[key];
-    card.querySelector('.total-caption').textContent=key==='active'?`of ${jobs.length} total jobs`:'jobs';
-    card.setAttribute('aria-pressed',String(jobStatusFilter===(key==='active'?'active':key)));
+    card.setAttribute('aria-pressed',String(jobStatusFilter===key));
   });
   const events=jobs.flatMap(job=>(job.events||[]).map(event=>({...event,jobLabel:job.label,jobId:job.id})))
     .sort((a,b)=>(Date.parse(b.time)||0)-(Date.parse(a.time)||0)).slice(0,14);
@@ -151,20 +220,16 @@ function renderJobs(){
     });
     window.scrollTo(pageScroll.left,pageScroll.top);
   };
-  const activeNote=document.activeElement?.matches('textarea[data-job-note]')?{
-    jobId:document.activeElement.dataset.jobNote,
-    start:document.activeElement.selectionStart,
-    end:document.activeElement.selectionEnd
-  }:null;
   const previousScroll=prefs.layout==='canvas'?{left:el.scrollLeft,top:el.scrollTop}:null;
   el.className='jobs '+(prefs.layout==='collapsed'?'connected':prefs.layout);
   el.classList.toggle('has-expanded',prefs.layout==='canvas'&&canvasExpanded.size>0);
   const matches=jobs.filter(job=>{
     const statusMatches=jobStatusFilter==='all'||(jobStatusFilter==='active'?['queued','running','cancelling'].includes(job.status):job.status===jobStatusFilter);
-    const searchable=[job.label,job.name,job.id,job.status,job.stage,jobNotes[job.id]||'',...(job.output||[]),...(job.events||[]).map(event=>event.message),...(job.artifacts||[])].join(' ').toLowerCase();
+    const searchable=[job.label,job.name,job.id,job.status,job.stage,...(job.events||[]).filter(event=>event.kind!=='output').map(event=>event.message),...(job.artifacts||[])].join(' ').toLowerCase();
     return statusMatches&&searchable.includes(jobSearch.toLowerCase());
   });
-  $('job-filter-count').textContent=`${matches.length} of ${jobs.length} jobs`;
+  $('job-filter-count').textContent=`${matches.length} / ${jobs.length}`;
+  $('job-filter-count').setAttribute('aria-label',`${matches.length} of ${jobs.length} jobs shown`);
   renderConnectedOverview();
   const controls=$('canvas-controls');
   controls.hidden=prefs.layout!=='canvas';
@@ -174,9 +239,8 @@ function renderJobs(){
   if(prefs.layout==='collapsed'){
     el.innerHTML=matches.map(job=>{
       const progress=Math.max(0,Math.min(100,Number(job.progress)||0));
-      const expanded=connectedExpanded.has(job.id)||notesExpanded.has(job.id);
-      const hasNote=Boolean((jobNotes[job.id]||'').trim());
-      return `<article class="job connected-job status-${escapeHTML(job.status)}"><div class="connected-job-row"><div class="connected-job-name"><span class="connected-status-dot" aria-hidden="true"></span><div><b>${escapeHTML(job.label)}</b><span>${escapeHTML(job.name)} · ${escapeHTML(job.stage||job.status)}</span></div></div><span class="connected-job-runtime">${formatRuntime(job.runtime)}</span><div class="connected-progress" role="progressbar" aria-label="Progress for ${escapeHTML(job.label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span><i style="width:${progress}%"></i></span><b>${progress}%</b></div><span class="pill ${escapeHTML(job.status)}"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span><div class="connected-job-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}<button class="note-toggle${hasNote?' has-note':''}" type="button" data-note-toggle="${escapeHTML(job.id)}" aria-label="${notesExpanded.has(job.id)?'Close':'Open'} notes for ${escapeHTML(job.label)}" aria-expanded="${notesExpanded.has(job.id)}" title="${hasNote?'Notes saved':'Add a note'}">▤</button><button class="connected-details-toggle" type="button" data-job-details="${escapeHTML(job.id)}" aria-label="${expanded?'Hide':'Show'} details for ${escapeHTML(job.label)}" aria-expanded="${expanded}">${expanded?'−':'+'}</button></div></div><div class="connected-job-details"${expanded?'':' hidden'}>${jobDetails(job)}</div></article>`;
+      const expanded=connectedExpanded.has(job.id);
+      return `<article class="job connected-job status-${escapeHTML(job.status)}"><div class="connected-job-row"><div class="connected-job-name"><span class="connected-status-dot" aria-hidden="true"></span><div><b>${escapeHTML(job.label)}</b><span>${escapeHTML(job.name)} · ${escapeHTML(job.stage||job.status)}</span></div></div><span class="connected-job-runtime">${formatRuntime(job.runtime)}</span><div class="connected-progress" role="progressbar" aria-label="Progress for ${escapeHTML(job.label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span><i style="width:${progress}%"></i></span><b>${progress}%</b></div><span class="pill ${escapeHTML(job.status)}"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span><div class="connected-job-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}<button class="job-audit-button" type="button" data-audit-job="${escapeHTML(job.id)}" title="View this job in Log Audit">Audit</button><button class="connected-details-toggle" type="button" data-job-details="${escapeHTML(job.id)}" aria-label="${expanded?'Hide':'Show'} details for ${escapeHTML(job.label)}" aria-expanded="${expanded}">${expanded?'−':'+'}</button></div></div><div class="connected-job-details"${expanded?'':' hidden'}>${jobDetails(job)}</div></article>`;
     }).join('');
   }else if(prefs.layout==='canvas'){
     const positions=matches.map(job=>canvasPosition(job,Math.max(0,jobs.findIndex(candidate=>candidate.id===job.id))));
@@ -187,8 +251,7 @@ function renderJobs(){
       const progress=Math.max(0,Math.min(100,Number(job.progress)||0));
       const position=positions[index];
       const expanded=canvasExpanded.has(job.id);
-      const hasNote=Boolean((jobNotes[job.id]||'').trim());
-      return `<article class="job canvas-node ${escapeHTML(job.status)} status-${escapeHTML(job.status)}${expanded?' expanded':''}" data-job-id="${escapeHTML(job.id)}" style="--node-x:${position.x}px;--node-y:${position.y}px;--progress-angle:${progress*3.6}deg"><div class="canvas-node-head"><div class="canvas-node-grab" title="Drag to arrange this job"><button class="canvas-expand" aria-expanded="${expanded}" aria-label="${expanded?'Collapse':'Expand'} details for ${escapeHTML(job.label)}"><span class="progress-ring" aria-hidden="true"></span><span class="canvas-node-copy"><b>${escapeHTML(job.label)}</b><span class="canvas-stage">${escapeHTML(job.stage||job.status)} · ${progress}%</span></span></button><span class="canvas-node-status"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span></div><div class="canvas-node-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}<button class="note-toggle${hasNote?' has-note':''}" type="button" data-note-toggle="${escapeHTML(job.id)}" aria-label="${notesExpanded.has(job.id)?'Close':'Open'} notes for ${escapeHTML(job.label)}" aria-expanded="${notesExpanded.has(job.id)}" title="${hasNote?'Notes saved':'Add a note'}">▤</button><span class="meta">#${escapeHTML(job.id)}</span></div></div>${jobDetails(job,true)}</article>`;
+      return `<article class="job canvas-node ${escapeHTML(job.status)} status-${escapeHTML(job.status)}${expanded?' expanded':''}" data-job-id="${escapeHTML(job.id)}" style="--node-x:${position.x}px;--node-y:${position.y}px;--progress-angle:${progress*3.6}deg"><div class="canvas-node-head"><div class="canvas-node-grab" title="Drag to arrange this job"><button class="canvas-expand" aria-expanded="${expanded}" aria-label="${expanded?'Collapse':'Expand'} details for ${escapeHTML(job.label)}"><span class="progress-ring" aria-hidden="true"></span><span class="canvas-node-copy"><b>${escapeHTML(job.label)}</b><span class="canvas-stage">${escapeHTML(job.stage||job.status)} · ${progress}%</span></span></button><span class="canvas-node-status"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span></div><div class="canvas-node-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}<button class="job-audit-button" type="button" data-audit-job="${escapeHTML(job.id)}" title="View this job in Log Audit">Audit</button><span class="meta">#${escapeHTML(job.id)}</span></div></div>${jobDetails(job)}</article>`;
     }).join('')}</div></div>`;
     el.querySelectorAll('.canvas-node').forEach(node=>{
       const id=node.dataset.jobId;
@@ -259,6 +322,7 @@ function renderJobs(){
     try{await window.pywebview.api.cancel_job(button.dataset.id);log('Cancellation requested: '+button.dataset.id)}
     catch(error){log('Error: '+(error.message||error))}
   });
+  el.querySelectorAll('[data-audit-job]').forEach(button=>button.onclick=()=>openJobAudit(button.dataset.auditJob));
   el.querySelectorAll('[data-job-details]').forEach(button=>button.onclick=()=>{
     const id=button.dataset.jobDetails;
     if(connectedExpanded.has(id))connectedExpanded.delete(id);
@@ -273,44 +337,6 @@ function renderJobs(){
       log(`${button.dataset.action==='open'?'Opened':'Revealed'} artifact: ${button.dataset.artifact}`);
     }catch(error){log('Artifact action failed: '+(error.message||error))}
   });
-  el.querySelectorAll('[data-note-toggle]').forEach(button=>button.onclick=()=>{
-    const id=button.dataset.noteToggle;
-    const opening=!notesExpanded.has(id);
-    if(opening)notesExpanded.add(id);
-    else notesExpanded.delete(id);
-    if(prefs.layout==='canvas'&&opening){
-      canvasExpanded.clear();
-      canvasExpanded.add(id);
-    }
-    renderJobs();
-    if(opening){
-      const editor=el.querySelector(`textarea[data-job-note="${CSS.escape(id)}"]`);
-      editor?.focus();
-      if(prefs.layout==='canvas'&&editor){
-        const node=editor.closest('.canvas-node');
-        const x=parseFloat(node.style.getPropertyValue('--node-x'))||0;
-        const y=parseFloat(node.style.getPropertyValue('--node-y'))||0;
-        el.scrollLeft=Math.max(0,x*prefs.canvasZoom-(el.clientWidth-node.offsetWidth*prefs.canvasZoom)/2);
-        el.scrollTop=Math.max(0,y*prefs.canvasZoom-(el.clientHeight-node.offsetHeight*prefs.canvasZoom)/2);
-      }
-    }else el.querySelector(`[data-note-toggle="${CSS.escape(id)}"]`)?.focus();
-  });
-  el.querySelectorAll('textarea[data-job-note]').forEach(editor=>editor.oninput=()=>{
-    const id=editor.dataset.jobNote;
-    jobNotes[id]=editor.value;
-    saveNotes();
-    const hasNote=Boolean(editor.value.trim());
-    const toggle=el.querySelector(`[data-note-toggle="${CSS.escape(id)}"]`);
-    toggle?.classList.toggle('has-note',hasNote);
-    if(toggle)toggle.title=hasNote?'Notes saved':'Add a note';
-  });
-  if(activeNote){
-    const editor=el.querySelector(`textarea[data-job-note="${CSS.escape(activeNote.jobId)}"]`);
-    if(editor){
-      editor.focus({preventScroll:true});
-      editor.setSelectionRange(activeNote.start,activeNote.end);
-    }
-  }
   restoreScroll();
 }
 function closeMenus(){
@@ -353,9 +379,6 @@ function setupMenus(){
   $('opacity').oninput=e=>{prefs.opacity=Number(e.target.value);apply()};
   $('glow').onchange=e=>{prefs.glow=e.target.checked;apply()};
   $('compact').onchange=e=>{prefs.compact=e.target.checked;apply()};
-  $('show-workspace-note').onchange=e=>{prefs.showWorkspaceNote=e.target.checked;apply()};
-  $('workspace-note-text').value=workspaceNote;
-  $('workspace-note-text').oninput=e=>{workspaceNote=e.target.value;saveNotes()};
   // Max concurrent + session controls
   const concurrentInput=$('max-concurrent');
   if(concurrentInput){
@@ -488,7 +511,7 @@ async function command(line){
   }catch(error){log('Error: '+(error.message||error))}
 }
 async function refreshCatalog(reload=false){
-  const previousSelection=$('run-script').value;
+  const previousSelection=$('run-script').value||prefs.selectedScript;
   catalogEntries=reload?await window.pywebview.api.reload_catalog():await window.pywebview.api.catalog();
   const select=$('run-script');
   select.replaceChildren(...catalogEntries.map(entry=>{
@@ -497,19 +520,133 @@ async function refreshCatalog(reload=false){
     return option;
   }));
   if(catalogEntries.some(entry=>entry.name===previousSelection))select.value=previousSelection;
+  else select.value=catalogEntries[0]?.name||'';
+  prefs.selectedScript=select.value||null;
   select.disabled=!catalogEntries.length;$('run-demo').disabled=!catalogEntries.length;$('edit-script').disabled=!select.value;
   $('command').placeholder=catalogEntries.length?`help · catalog reload · run ${catalogEntries[0].name} · list`:'No runnable scripts found';
   const selected=catalogEntries.find(entry=>entry.name===select.value);
-  $('catalog-description').textContent=selected?.description||'Add scripts with ACW metadata to the scripts folder';
-  select.onchange=()=>{$('catalog-description').textContent=catalogEntries.find(entry=>entry.name===select.value)?.description||'';$('edit-script').disabled=!select.value};
+  $('catalog-description').textContent=selected?.description||'Register a script from Manage Work';
+  select.onchange=()=>{prefs.selectedScript=select.value||null;save();$('catalog-description').textContent=catalogEntries.find(entry=>entry.name===select.value)?.description||'';$('edit-script').disabled=!select.value};
   $('jobs').querySelector('.empty')?.replaceChildren(document.createTextNode('No executions yet. Select a script above or type run <command>.'));
 }
-const jobFilters=document.createElement('div');jobFilters.id='job-filters';jobFilters.innerHTML='<strong class="jobs-title">JOBS</strong><select id="job-status-filter" aria-label="Filter jobs by status"><option value="all">All statuses</option><option value="active">Active</option><option value="queued">Queued</option><option value="running">Running</option><option value="cancelling">Cancelling</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select><input id="job-search" type="search" aria-label="Search jobs" placeholder="Search jobs, output, and artifacts"><span id="job-filter-count" class="subtle" aria-live="polite">0 of 0 jobs</span>';document.querySelector('.workspace-head').after(jobFilters);$('job-status-filter').onchange=e=>{jobStatusFilter=e.target.value;renderJobs()};$('job-search').oninput=e=>{jobSearch=e.target.value.trim();renderJobs()};
+const jobFilters=document.createElement('div');jobFilters.id='job-filters';jobFilters.innerHTML='<strong class="jobs-title">JOBS</strong><select id="job-status-filter" aria-label="Filter jobs by status"><option value="all">All statuses</option><option value="active">Active</option><option value="queued">Queued</option><option value="running">Running</option><option value="cancelling">Cancelling</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select><input id="job-search" type="search" aria-label="Search jobs" placeholder="Search jobs and artifacts"><span id="job-filter-count" class="subtle" aria-live="polite">0 of 0</span>';document.querySelector('.workspace-head').after(jobFilters);$('job-status-filter').onchange=e=>{jobStatusFilter=e.target.value;renderJobs()};$('job-search').oninput=e=>{jobSearch=e.target.value.trim();renderJobs()};
+function setPage(page){
+  const activePage=typeof page==='boolean'?(page?'manage':'execution'):page;
+  $('execution-page').hidden=activePage!=='execution';
+  $('manage-work-page').hidden=activePage!=='manage';
+  $('log-audit-page').hidden=activePage!=='audit';
+  $('manage-work-nav').setAttribute('aria-pressed',String(activePage==='manage'));
+  $('log-audit-nav').setAttribute('aria-pressed',String(activePage==='audit'));
+  if(activePage==='manage')loadRegisteredScripts();
+}
+function setManageMessage(message,isError=false){
+  const target=$('manage-message');
+  target.textContent=message;
+  target.classList.toggle('error',isError);
+}
+function updateRegistrationForm(){
+  $('save-registered-script').disabled=!$('register-script-form').checkValidity();
+}
+async function loadRegisteredScripts(){
+  if(!bridgeReady)return;
+  try{
+    const scripts=await window.pywebview.api.registered_scripts();
+    const list=$('registered-scripts-list');
+    list.innerHTML=scripts.map(script=>`<article class="registered-script${script.available?'':' unavailable'}"><div><h3>${escapeHTML(script.label)} <span class="subtle">(${escapeHTML(script.name)})</span></h3><p>${script.available?'Available':escapeHTML(script.reason||'Unavailable')}</p><p>Script: <code>${escapeHTML(script.path)}</code></p><p>Working directory: <code>${escapeHTML(script.working_directory)}</code></p></div><div class="registered-script-actions">${script.available?'':`<button type="button" data-relink-script="${escapeHTML(script.name)}">Relink…</button>`}<button type="button" data-remove-script="${escapeHTML(script.name)}">Remove</button></div></article>`).join('')||'<p class="subtle">No external scripts registered yet.</p>';
+    list.querySelectorAll('[data-relink-script]').forEach(button=>button.onclick=async()=>{
+      try{
+        const selected=await window.pywebview.api.choose_script_file();
+        if(!selected)return;
+        await window.pywebview.api.relink_registered_script(button.dataset.relinkScript,selected.path);
+        await refreshCatalog();
+        await loadRegisteredScripts();
+        setManageMessage('Script relinked.');
+      }catch(error){setManageMessage(error.message||String(error),true)}
+    });
+    list.querySelectorAll('[data-remove-script]').forEach(button=>button.onclick=async()=>{
+      const name=button.dataset.removeScript;
+      if(!confirm(`Remove ${name} from the ACW catalog? The script file will not be deleted.`))return;
+      try{
+        await window.pywebview.api.remove_registered_script(name);
+        await refreshCatalog();
+        await loadRegisteredScripts();
+        setManageMessage('Script removed from ACW. The original file was not changed.');
+      }catch(error){setManageMessage(error.message||String(error),true)}
+    });
+  }catch(error){setManageMessage(error.message||String(error),true)}
+}
+function setupManageWork(){
+  $('manage-work-nav').onclick=()=>setPage('manage');
+  $('execution-page-nav').onclick=()=>setPage('execution');
+  const form=$('register-script-form');
+  form.querySelectorAll('input').forEach(input=>input.oninput=updateRegistrationForm);
+  $('browse-script').onclick=async()=>{
+    try{
+      const selected=await window.pywebview.api.choose_script_file();
+      if(!selected)return;
+      $('registered-script-name').value=selected.name;
+      $('registered-script-label').value=selected.label;
+      $('registered-script-path').value=selected.path;
+      $('registered-script-cwd').value=selected.working_directory;
+      updateRegistrationForm();
+    }catch(error){setManageMessage(error.message||String(error),true)}
+  };
+  $('browse-working-directory').onclick=async()=>{
+    try{
+      const selected=await window.pywebview.api.choose_working_directory($('registered-script-cwd').value);
+      if(selected)$('registered-script-cwd').value=selected;
+      updateRegistrationForm();
+    }catch(error){setManageMessage(error.message||String(error),true)}
+  };
+  form.onsubmit=async event=>{
+    event.preventDefault();
+    if(!form.reportValidity())return;
+    try{
+      await window.pywebview.api.register_script(
+        $('registered-script-name').value.trim(),
+        $('registered-script-path').value,
+        $('registered-script-cwd').value,
+        $('registered-script-label').value.trim(),
+      );
+      await refreshCatalog();
+      await loadRegisteredScripts();
+      form.reset();
+      updateRegistrationForm();
+      setManageMessage('Script registered and available in the workspace selector.');
+    }catch(error){setManageMessage(error.message||String(error),true)}
+  };
+  updateRegistrationForm();
+}
+function setupAudit(){
+  $('log-audit-nav').onclick=()=>{
+    auditTargetId=null;
+    $('audit-current-search').value='';
+    $('audit-current-status').value='all';
+    selectAuditView('current');
+    setPage('audit');
+    refreshAuditCurrent();
+  };
+  $('audit-back-nav').onclick=()=>setPage('execution');
+  document.querySelectorAll('[data-audit-view]').forEach(button=>button.onclick=()=>{
+    selectAuditView(button.dataset.auditView);
+    auditTargetId=null;
+    if(button.dataset.auditView==='current')refreshAuditCurrent();
+  });
+  $('audit-current-search').oninput=()=>{auditTargetId=null;renderAuditCurrent()};
+  $('audit-current-status').onchange=()=>{auditTargetId=null;renderAuditCurrent()};
+  $('audit-refresh-current').onclick=refreshAuditCurrent;
+  $('audit-prior-filter-status').onchange=renderAuditPrior;
+  $('audit-search-form').onsubmit=event=>{
+    event.preventDefault();
+    auditTargetId=null;
+    searchPriorAudit($('audit-prior-search').value.trim());
+  };
+}
 const connectedSummary=document.createElement('section');
 connectedSummary.id='connected-summary';
 connectedSummary.className='connected-summary';
 connectedSummary.setAttribute('aria-label','Job totals');
-connectedSummary.innerHTML='<button class="total-card total-active" type="button" data-total="active" aria-pressed="false"><span class="total-icon" aria-hidden="true">⌁</span><span class="total-label">ACTIVE JOBS</span><b class="total-value">0</b><small class="total-caption">of 0 total jobs</small></button><button class="total-card total-running" type="button" data-total="running" aria-pressed="false"><span class="total-icon" aria-hidden="true">●</span><span class="total-label">RUNNING</span><b class="total-value">0</b><small class="total-caption">jobs</small></button><button class="total-card total-completed" type="button" data-total="completed" aria-pressed="false"><span class="total-icon" aria-hidden="true">✓</span><span class="total-label">COMPLETED</span><b class="total-value">0</b><small class="total-caption">jobs</small></button><button class="total-card total-failed" type="button" data-total="failed" aria-pressed="false"><span class="total-icon" aria-hidden="true">!</span><span class="total-label">FAILED</span><b class="total-value">0</b><small class="total-caption">jobs</small></button>';
+connectedSummary.innerHTML='<button class="total-card total-running" type="button" data-total="running" aria-pressed="false"><span class="total-label">Running</span><b class="total-value">0</b></button><button class="total-card total-completed" type="button" data-total="completed" aria-pressed="false"><span class="total-label">Completed</span><b class="total-value">0</b></button><button class="total-card total-failed" type="button" data-total="failed" aria-pressed="false"><span class="total-label">Failed</span><b class="total-value">0</b></button>';
 const connectedDashboard=document.createElement('div');
 connectedDashboard.id='connected-dashboard';
 connectedDashboard.className='connected-dashboard';
@@ -522,13 +659,11 @@ liveEvents.className='live-events';
 liveEvents.setAttribute('aria-label','Recent job events');
 liveEvents.innerHTML='<div class="live-events-head"><h2>LIVE EVENTS</h2><span><i></i> Live</span></div><ol id="live-events-list"><li class="live-events-empty">Events will appear here as jobs run.</li></ol>';
 const workspaceHead=document.querySelector('.workspace-head');
-workspaceHead.after(connectedSummary);
-connectedSummary.after($('workspace-note'));
-connectedSummary.nextElementSibling.after(connectedDashboard);
+workspaceHead.after(connectedDashboard);
 connectedDashboard.append(jobsColumn,liveEvents);
 jobsColumn.append(jobFilters,$('jobs'));
 connectedSummary.querySelectorAll('[data-total]').forEach(card=>card.onclick=()=>{
-  jobStatusFilter=card.dataset.total==='active'?'active':card.dataset.total;
+  jobStatusFilter=card.dataset.total;
   $('job-status-filter').value=jobStatusFilter;
   renderJobs();
 });
@@ -599,7 +734,7 @@ jobsViewport.addEventListener('wheel',event=>{
   }
 },{passive:false});
 window.addEventListener('resize',()=>{if(prefs.layout==='canvas'&&!canvasDragging)renderJobs()});
-const scriptSelect=document.createElement('select');scriptSelect.id='run-script';scriptSelect.disabled=true;scriptSelect.setAttribute('aria-label','Select an approved script');const reloadCatalogButton=document.createElement('button');reloadCatalogButton.type='button';reloadCatalogButton.id='reload-catalog';reloadCatalogButton.className='catalog-icon-button';reloadCatalogButton.textContent='↻';reloadCatalogButton.title='Reload scripts from the scripts folder';reloadCatalogButton.setAttribute('aria-label','Reload script catalog');reloadCatalogButton.onclick=async()=>{reloadCatalogButton.disabled=true;try{await command('catalog reload')}finally{reloadCatalogButton.disabled=false}};const editScriptButton=document.createElement('button');editScriptButton.type='button';editScriptButton.id='edit-script';editScriptButton.className='catalog-icon-button';editScriptButton.textContent='✎';editScriptButton.title='Open selected script for editing';editScriptButton.setAttribute('aria-label','Edit selected script');editScriptButton.disabled=true;editScriptButton.onclick=async()=>{if(!scriptSelect.value)return;editScriptButton.disabled=true;try{await window.pywebview.api.edit_script(scriptSelect.value);log('Opened script for editing: '+scriptSelect.value)}catch(error){log('Unable to open script for editing: '+(error.message||error))}finally{editScriptButton.disabled=!scriptSelect.value}};const runControls=document.createElement('div');runControls.className='run-controls';runControls.append(scriptSelect,$('run-demo'),reloadCatalogButton,editScriptButton);document.querySelector('.workspace-head').append(runControls);const catalogDescription=document.createElement('span');catalogDescription.id='catalog-description';catalogDescription.className='subtle';document.querySelector('.workspace-head').firstElementChild.append(catalogDescription);$('run-demo').textContent='▶ Run selected';$('command').setAttribute('aria-label','Command terminal');$('command').title='Enter runs a command. Shift+Enter inserts a new line. Use Up and Down to browse command history.';document.querySelector('.hint').textContent='Enter run · Shift+Enter newline';
+const scriptSelect=document.createElement('select');scriptSelect.id='run-script';scriptSelect.disabled=true;scriptSelect.setAttribute('aria-label','Select an approved script');const reloadCatalogButton=document.createElement('button');reloadCatalogButton.type='button';reloadCatalogButton.id='reload-catalog';reloadCatalogButton.className='catalog-icon-button';reloadCatalogButton.textContent='↻';reloadCatalogButton.title='Reload scripts from the scripts folder and registered scripts';reloadCatalogButton.setAttribute('aria-label','Reload script catalog');reloadCatalogButton.onclick=async()=>{reloadCatalogButton.disabled=true;try{await command('catalog reload')}finally{reloadCatalogButton.disabled=false}};const editScriptButton=document.createElement('button');editScriptButton.type='button';editScriptButton.id='edit-script';editScriptButton.className='catalog-icon-button';editScriptButton.textContent='✎';editScriptButton.title='Open selected script for editing';editScriptButton.setAttribute('aria-label','Edit selected script');editScriptButton.disabled=true;editScriptButton.onclick=async()=>{if(!scriptSelect.value)return;editScriptButton.disabled=true;try{await window.pywebview.api.edit_script(scriptSelect.value);log('Opened script for editing: '+scriptSelect.value)}catch(error){log('Unable to open script for editing: '+(error.message||error))}finally{editScriptButton.disabled=!scriptSelect.value}};const runControls=document.createElement('div');runControls.className='run-controls';runControls.append(connectedSummary,scriptSelect,$('run-demo'),reloadCatalogButton,editScriptButton);document.querySelector('.workspace-head').append(runControls);const catalogDescription=document.createElement('span');catalogDescription.id='catalog-description';catalogDescription.className='subtle';document.querySelector('.workspace-head').firstElementChild.append(catalogDescription);$('run-demo').textContent='▶ Run selected';$('command').setAttribute('aria-label','Command terminal');$('command').title='Enter runs a command. Shift+Enter inserts a new line. Use Up and Down to browse command history.';document.querySelector('.hint').textContent='Enter run · Shift+Enter newline';
 $('command').addEventListener('input',e=>{e.target.style.height='29px';e.target.style.height=Math.min(e.target.scrollHeight,180)+'px'});
 $('command').addEventListener('keydown',e=>{
   const input=e.target;
@@ -636,9 +771,9 @@ $('command').addEventListener('keydown',e=>{
     command(line);
   }
 });
-$('run-demo').onclick=()=>bridgeReady&&scriptSelect.value?command('run '+scriptSelect.value):log(bridgeReady?'No runnable scripts found. Add ACW metadata to a script.':'Launch with python main.py');
-function refreshClock(){$('clock').textContent=new Date().toLocaleString()};refreshClock();setInterval(refreshClock,1000);setupMenus();apply();
-async function poll(){if(!bridgeReady||busy)return;busy=true;try{jobs=await window.pywebview.api.jobs();if(!(prefs.layout==='canvas'&&canvasDragging))renderJobs();if(!jobs.length)$('jobs').querySelector('.empty').textContent='No executions yet. Select a script above or type run <command>.';$('connection').textContent=`Local Python connected · ${jobs.filter(j=>j.status==='running').length} running · ${jobs.length} total` }catch(e){$('connection').textContent='Bridge error: '+e}finally{busy=false}}
+$('run-demo').onclick=()=>bridgeReady&&scriptSelect.value?command('run '+scriptSelect.value):log(bridgeReady?'No runnable scripts found. Add a script in Manage Work or add ACW metadata.':'Launch with python main.py');
+function refreshClock(){$('clock').textContent=new Date().toLocaleString()};refreshClock();setInterval(refreshClock,1000);setupMenus();setupManageWork();setupAudit();apply();
+async function poll(){if(!bridgeReady||busy)return;busy=true;try{jobs=await window.pywebview.api.jobs();if(!(prefs.layout==='canvas'&&canvasDragging))renderJobs();if(!$('log-audit-page').hidden){try{auditCurrentJobs=await window.pywebview.api.audit_current_session();auditCurrentIds=new Set(auditCurrentJobs.map(job=>job.id));renderAuditCurrent()}catch(error){$('audit-current-results').textContent='Unable to refresh current-session jobs: '+(error.message||error)}}if(!jobs.length)$('jobs').querySelector('.empty').textContent='No executions yet. Select a script above or type run <command>.';$('connection').textContent=`Local Python connected · ${jobs.filter(j=>j.status==='running').length} running · ${jobs.length} total` }catch(e){$('connection').textContent='Bridge error: '+e}finally{busy=false}}
 window.addEventListener('pywebviewready',async()=>{
   bridgeReady=true;
   log('Python bridge connected');
@@ -648,6 +783,7 @@ window.addEventListener('pywebviewready',async()=>{
     if(input){input.value=n;$('concurrent-val').textContent=n}
   }catch{}
   refreshCatalog().catch(e=>log('Catalog error: '+(e.message||e)));
+  if(!$('manage-work-page').hidden)loadRegisteredScripts();
   poll();
   setInterval(poll,850);
 });
@@ -673,25 +809,23 @@ backgroundStyle.textContent=`
   .run-controls select{min-width:190px;max-width:320px}
   .catalog-icon-button{width:34px;height:34px;padding:4px;font-size:18px;line-height:1}
   .catalog-icon-button:disabled{opacity:.45;cursor:not-allowed}
+  .job-audit-button{padding:4px 7px;font-size:10px}
   #connected-summary{display:none}
   #connected-dashboard{display:flex;flex:1;flex-direction:column;min-height:0}
   .live-events{display:none}
-  .connected-layout #connected-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0 0 12px}
-  .total-card{display:grid;grid-template-columns:26px minmax(0,1fr) auto;grid-template-rows:auto auto;align-items:center;column-gap:8px;min-width:0;min-height:48px;padding:6px 10px;text-align:left;border-radius:10px;background:linear-gradient(145deg,color-mix(in srgb,var(--status-color) 8%,transparent),transparent 75%),#0c1c2ac9;border-color:color-mix(in srgb,var(--status-color) 27%,transparent);transition:border-color .18s,box-shadow .18s,transform .18s}
-  .total-active{grid-column:1/-1}
-  .total-card:hover{border-color:color-mix(in srgb,var(--status-color) 65%,transparent);box-shadow:0 0 18px color-mix(in srgb,var(--status-color) 17%,transparent);transform:translateY(-1px)}
-  .total-card[aria-pressed=true]{border-color:var(--status-color);box-shadow:0 0 16px color-mix(in srgb,var(--status-color) 24%,transparent)}
-  .total-icon{grid-column:1;grid-row:1/3;color:var(--status-color);font-size:15px;font-weight:800}
-  .total-label{grid-column:2;grid-row:1;color:var(--text);font-size:9px;font-weight:700;letter-spacing:.1em}
-  .total-value{grid-column:3;grid-row:1/3;color:var(--status-color);font-size:22px;line-height:1;text-align:right;font-variant-numeric:tabular-nums;text-shadow:0 0 14px color-mix(in srgb,var(--status-color) 30%,transparent)}
-  .total-caption{grid-column:2;grid-row:2;color:var(--muted);font-size:9px;text-align:left}
-  .total-running{--status-color:#4ee6ef}.total-completed{--status-color:#72e0b4}.total-failed{--status-color:var(--failed-color)}.total-active{--status-color:#9fc6f4}
+  .connected-layout .run-controls #connected-summary{display:flex;align-items:center;gap:3px;margin:0;flex:none}
+  .total-card{display:inline-flex;align-items:center;gap:4px;min-width:0;padding:3px 6px;text-align:left;border-radius:20px;background:#0c1c2a80;border-color:color-mix(in srgb,var(--status-color) 22%,transparent);transition:border-color .18s,background-color .18s}
+  .total-card:hover{border-color:color-mix(in srgb,var(--status-color) 50%,transparent);background:color-mix(in srgb,var(--status-color) 6%,#0c1c2a)}
+  .total-card[aria-pressed=true]{border-color:color-mix(in srgb,var(--status-color) 65%,transparent)}
+  .total-label{color:var(--muted);font-size:9px;font-weight:600}
+  .total-value{color:var(--status-color);font-size:12px;line-height:1;font-variant-numeric:tabular-nums}
+  .total-running{--status-color:#4ee6ef}.total-completed{--status-color:#72e0b4}.total-failed{--status-color:var(--failed-color)}
   .connected-layout #connected-dashboard{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,310px);align-items:stretch;gap:12px;flex:1;min-height:0}
   @media(min-width:901px){.connected-layout #connected-dashboard:has(#jobs>.empty){align-content:start}.connected-layout #connected-dashboard:has(#jobs>.empty) .jobs-column{height:max-content;align-self:start}.connected-layout #connected-dashboard:has(#jobs>.empty) .jobs.connected{flex:none}}
   .jobs-column{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0}
   .connected-layout #job-filters{margin-bottom:8px}
-  .jobs-title{color:var(--text);font-size:12px;letter-spacing:.12em}
-  .connected-layout #job-filter-count{margin-left:0}
+  .jobs-title{color:var(--muted);font-size:10px;letter-spacing:.08em}
+  .connected-layout #job-filter-count{margin-left:auto}
   .connected-layout .jobs.connected{flex:1;min-height:0;overflow-y:auto;align-content:start;grid-auto-rows:max-content;gap:8px;padding:10px;border:1px solid var(--border);border-radius:var(--radius);background:linear-gradient(160deg,color-mix(in srgb,var(--accent) 5%,transparent),transparent 38%),#081721e8;scrollbar-color:color-mix(in srgb,var(--accent) 30%,transparent) transparent}
   .connected-job{padding:0;overflow:hidden}
   .connected-job-row{display:grid;grid-template-columns:minmax(150px,1.45fr) 58px minmax(90px,1fr) auto auto;align-items:center;gap:12px;min-height:64px;padding:9px 12px}
@@ -718,7 +852,7 @@ backgroundStyle.textContent=`
   .connected-details-toggle{font-size:16px}
   .connected-job-details{padding:0 12px 12px}
   .connected-job-details[hidden]{display:none}
-  .connected-job-details .panels{grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  .connected-job-details .panels{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
   .connected-job-details .pane{min-height:130px;padding:12px}
   .connected-job-details .pane:not(:last-child):after{display:none}
   .live-events{min-width:0;overflow:hidden;border:1px solid var(--border);border-radius:var(--radius);background:linear-gradient(160deg,color-mix(in srgb,var(--accent) 5%,transparent),transparent 38%),#081721e8}
@@ -736,9 +870,10 @@ backgroundStyle.textContent=`
   .event-copy b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:11px}
   .event-message{display:-webkit-box;overflow:hidden;color:var(--muted);font-size:10px;line-height:1.4;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
   .live-events-empty{padding:18px 12px;color:var(--muted);font-size:12px;text-align:center}
-  #job-filters{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 14px;padding:11px 14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
-  #job-filters input{flex:1;min-width:180px;background:#0b1b27;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px}
-  #job-filter-count{margin-left:auto}
+  #job-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 8px;padding:0 0 8px;border:0;border-bottom:1px solid color-mix(in srgb,var(--border) 60%,transparent);border-radius:0;background:transparent}
+  #job-filters select{padding:5px 8px;font-size:12px}
+  #job-filters input{flex:1;min-width:180px;max-width:320px;background:#0b1b27;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 9px;font-size:12px}
+  #job-filter-count{margin-left:auto;font-size:11px;white-space:nowrap}
   #canvas-controls{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin:0 0 12px}
   #canvas-controls[hidden]{display:none}
   #canvas-controls button{padding:5px 10px}
@@ -801,12 +936,10 @@ backgroundStyle.textContent=`
   .canvas-node-actions button{padding:2px 7px;font-size:11px}
   .canvas-node .meta{color:var(--muted);font:10px monospace}
   .canvas-node .panels{display:none}
-  .canvas-node .job-note-drawer{display:none}
   .canvas-node.expanded{width:min(860px,calc(100vw - 100px));z-index:5;box-shadow:0 22px 65px #000b}
   .canvas-node.expanded{background:var(--bg)}
   .jobs.canvas.has-expanded .canvas-node:not(.expanded){opacity:.24}
   .canvas-node.expanded .panels{display:grid;padding:12px}
-  .canvas-node.expanded .job-note-drawer{display:block}
   .canvas-node.expanded .panels{grid-template-columns:repeat(3,minmax(0,1fr))}
   .canvas-node.expanded .panels{gap:14px}
   .canvas-node.expanded .pane{padding:12px;min-height:120px}
@@ -815,11 +948,12 @@ backgroundStyle.textContent=`
   .artifact-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:11px ui-monospace,Consolas,monospace}
   .artifact-row button{padding:3px 7px;font-size:11px}
   @media(max-width:900px){.canvas-node.expanded{width:min(620px,calc(100vw - 55px))}}
-  @media(max-width:1200px){.connected-layout #connected-dashboard{grid-template-columns:minmax(0,1fr) 270px}.connected-layout #connected-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.connected-job-row{grid-template-columns:minmax(120px,1.3fr) 50px minmax(80px,1fr) auto auto;gap:8px}.connected-job .pill{font-size:9px;padding:2px 7px}}
-  @media(max-width:900px){header{padding:3px 9px}:root{--logo-size:52px}.connected-layout #connected-dashboard{grid-template-columns:minmax(0,1fr)}.connected-layout .live-events{order:2}.connected-layout #live-events-list{flex:initial;max-height:340px;min-height:100px}.brand-copy b{font-size:18px}.brand-copy small{font-size:7px}}
-  @media(max-width:600px){.connected-layout #connected-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.total-card{min-height:44px;padding:5px 8px}.total-active{grid-column:1/-1}.total-value{font-size:20px}.connected-job-row{grid-template-columns:minmax(0,1fr) auto auto;gap:6px;padding:9px}.connected-job-name{grid-column:1/3}.connected-job-runtime{grid-column:3;grid-row:1}.connected-progress{grid-column:1;grid-row:2}.connected-job-row>.pill{grid-column:2;grid-row:2}.connected-job-actions{grid-column:3;grid-row:2}.connected-job-details .panels{grid-template-columns:1fr}.connected-layout #job-filters{gap:7px}.jobs-title{width:100%}}
+  @media(max-width:1200px){.connected-layout #connected-dashboard{grid-template-columns:minmax(0,1fr) 270px}.connected-job-row{grid-template-columns:minmax(120px,1.3fr) 50px minmax(80px,1fr) auto auto;gap:8px}.connected-job .pill{font-size:9px;padding:2px 7px}.connected-job-details .panels{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:900px){header{padding:3px 9px}:root{--logo-size:52px}.connected-layout #connected-dashboard{grid-template-columns:minmax(0,1fr)}.connected-layout .live-events{order:2}.connected-layout #live-events-list{flex:initial;max-height:340px;min-height:100px}.brand-copy b{font-size:18px}.brand-copy small{font-size:7px}.connected-job-details .panels{grid-template-columns:1fr}}
+  @media(max-width:700px){.brand-copy small{display:none}:root{--logo-size:40px}}
+  @media(max-width:600px){.connected-layout .run-controls #connected-summary{gap:2px}.total-card{padding:3px 5px}.total-label{font-size:8px}.total-value{font-size:11px}.connected-job-row{grid-template-columns:minmax(0,1fr) auto auto;gap:6px;padding:9px}.connected-job-name{grid-column:1/3}.connected-job-runtime{grid-column:3;grid-row:1}.connected-progress{grid-column:1;grid-row:2}.connected-job-row>.pill{grid-column:2;grid-row:2}.connected-job-actions{grid-column:3;grid-row:2}.connected-layout #job-filters{gap:7px}}
   @media(max-width:600px){.workspace-head{align-items:flex-start;flex-wrap:wrap}.run-controls{width:100%}.run-controls select{flex:1;min-width:0}.jobs.canvas{height:auto;min-height:300px;max-height:none}}
-  @media(max-width:600px){#job-filters input{min-width:100%}#job-filter-count{margin-left:0}}
+  @media(max-width:600px){#job-filters input{min-width:100%}#job-filter-count{margin-left:auto}}
 `;
 document.head.append(backgroundStyle);
 

@@ -1,4 +1,7 @@
 """Narrow pywebview bridge: never expose arbitrary shell execution."""
+from pathlib import Path
+import re
+
 from acw.engine import Engine
 
 
@@ -12,11 +15,64 @@ class API:
     def jobs(self):
         return self.engine.snapshot()
 
+    def audit_current_session(self):
+        return self.engine.audit_current_session()
+
+    def search_audit(self, query, limit=100):
+        return self.engine.search_audit(query, limit)
+
     def start_job(self, name, script_args=None):
         return self.engine.start(name, script_args)
 
     def reload_catalog(self):
         return self.engine.reload_catalog()
+
+    def choose_script_file(self):
+        import webview
+
+        if not webview.windows:
+            raise RuntimeError('No application window is available.')
+        selection = webview.windows[0].create_file_dialog(
+            webview.FileDialog.OPEN,
+            allow_multiple=False,
+            file_types=('Python files (*.py)',),
+        )
+        if not selection:
+            return None
+        path = Path(selection[0]).expanduser()
+        stem = re.sub(r'[^a-z0-9]+', '-', path.stem.lower()).strip('-') or 'script'
+        if not stem[0].isalpha():
+            stem = 'script-' + stem
+        return {
+            'path': str(path),
+            'working_directory': str(path.parent),
+            'name': stem,
+            'label': path.stem.replace('-', ' ').replace('_', ' ').title(),
+        }
+
+    def choose_working_directory(self, directory=None):
+        import webview
+
+        if not webview.windows:
+            raise RuntimeError('No application window is available.')
+        initial_directory = str(Path(directory).expanduser()) if directory else str(Path.home())
+        selection = webview.windows[0].create_file_dialog(
+            webview.FileDialog.FOLDER,
+            directory=initial_directory,
+        )
+        return selection[0] if selection else None
+
+    def registered_scripts(self):
+        return self.engine.list_registered_scripts()
+
+    def register_script(self, name, path, working_directory, label):
+        return self.engine.register_script(name, path, working_directory, label)
+
+    def relink_registered_script(self, name, path):
+        return self.engine.relink_registered_script(name, path)
+
+    def remove_registered_script(self, name):
+        return self.engine.remove_registered_script(name)
 
     def edit_script(self, name):
         return self.engine.edit_script(name)

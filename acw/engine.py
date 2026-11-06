@@ -25,6 +25,7 @@ RUN_DIR = ROOT / 'runs'
 SESSIONS_DIR = ROOT / 'sessions'
 HISTORY_FILE = RUN_DIR / 'history.jsonl'
 SESSION_FILE = RUN_DIR / 'last_session.json'
+REGISTERED_SCRIPTS_FILE = RUN_DIR / 'registered_scripts.json'
 DEFAULT_MAX_CONCURRENT = 4
 MAX_LINES = 250
 MAX_RUNS = 200
@@ -47,15 +48,17 @@ class Engine:
     def __init__(self):
         self.lock = threading.RLock()
         self.jobs = {}
+        self.audit_session_job_ids = set()
         self.processes = {}
         self.job_scripts = {}
         self.job_arguments = {}
         self.queue = deque()  # job_ids waiting for a slot
         self.max_concurrent = DEFAULT_MAX_CONCURRENT
-        self.registry = self._discover_scripts()
-        self._averages = {}  # script_name -> list of recent runtimes
         RUN_DIR.mkdir(exist_ok=True)
         SESSIONS_DIR.mkdir(exist_ok=True)
+        self.custom_scripts = self._load_registered_scripts()
+        self.registry = self._build_registry(self._discover_scripts())
+        self._averages = {}  # script_name -> list of recent runtimes
         self._load_averages()
         self._restore_last_session()
 
@@ -104,7 +107,9 @@ class Engine:
             registry[name] = {
                 'label': label,
                 'path': resolved,
+                'working_directory': ROOT.resolve(),
                 'description': metadata['description'],
+                'registered': False,
                 'output_dirs': [
                     (ROOT / output_dir).resolve()
                     if not Path(output_dir).expanduser().is_absolute()
@@ -114,6 +119,181 @@ class Engine:
             }
         return registry
 
+    def _load_registered_scripts(self):
+        if not REGISTERED_SCRIPTS_FILE.exists():
+            return {}
+        try:
+            data = json.loads(REGISTERED_SCRIPTS_FILE.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f'Unable to read registered scripts: {exc}') from exc
+        if not isinstance(data, dict):
+            raise ValueError('Registered scripts file must contain an object.')
+
+        scripts = {}
+        for name, item in data.items():
+            if (
+                not isinstance(name, str)
+                or not COMMAND_PATTERN.fullmatch(name)
+                or not isinstance(item, dict)
+                or not isinstance(item.get('path'), str)
+                or not isinstance(item.get('working_directory'), str)
+                or not isinstance(item.get('label'), str)
+            ):
+                raise ValueError(f'Invalid registered script entry: {name!r}.')
+            path = Path(item['path']).expanduser()
+            working_directory = Path(item['working_directory']).expanduser()
+            if not path.is_absolute() or path.suffix.lower() != '.py' or not working_directory.is_absolute():
+                raise ValueError(f'Invalid paths for registered script {name!r}.')
+            scripts[name] = {
+                'label': item['label'],
+                'path': path,
+                'working_directory': working_directory,
+                'description': item.get('description') or str(path),
+                'registered': True,
+                'output_dirs': [],
+            }
+        return scripts
+
+    def _save_registered_scripts(self, scripts):
+        data = {
+            name: {
+                'label': item['label'],
+                'path': str(item['path']),
+                'working_directory': str(item['working_directory']),
+                'description': item['description'],
+            }
+            for name, item in scripts.items()
+        }
+        temporary = REGISTERED_SCRIPTS_FILE.with_suffix('.json.tmp')
+        temporary.write_text(json.dumps(data, indent=2), encoding='utf-8')
+        temporary.replace(REGISTERED_SCRIPTS_FILE)
+
+    def _build_registry(self, discovered):
+        registry = dict(discovered)
+        for name, item in self.custom_scripts.items():
+            if name in registry:
+                continue
+            registry[name] = item
+        return registry
+
+    @staticmethod
+    def _script_available(script):
+        path = Path(script['path']).expanduser()
+        working_directory = Path(script['working_directory']).expanduser()
+        return (
+            path.suffix.lower() == '.py'
+            and path.is_file()
+            and working_directory.is_dir()
+        )
+
+    @staticmethod
+    def _validate_script_path(path):
+        if not isinstance(path, str) or '\0' in path:
+            raise ValueError('Choose a Python script file.')
+        try:
+            resolved = Path(path).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError('The selected script does not exist or cannot be resolved.') from exc
+        if not resolved.is_file() or resolved.suffix.lower() != '.py':
+            raise ValueError('The selected file must be a Python (.py) script.')
+        return resolved
+
+    @staticmethod
+    def _validate_working_directory(directory):
+        if not isinstance(directory, str) or '\0' in directory:
+            raise ValueError('Choose an existing working directory.')
+        try:
+            resolved = Path(directory).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError('The selected working directory does not exist or cannot be resolved.') from exc
+        if not resolved.is_dir():
+            raise ValueError('The selected working directory must be a folder.')
+        return resolved
+
+    def _registered_script_summary(self, name, item):
+        conflict = self.registry.get(name) is not item
+        available = not conflict and self._script_available(item)
+        summary = {
+            'name': name,
+            'label': item['label'],
+            'description': item['description'],
+            'path': str(item['path']),
+            'working_directory': str(item['working_directory']),
+            'available': available,
+        }
+        if conflict:
+            summary['reason'] = 'Command name conflicts with a script in the built-in catalog.'
+        elif not available:
+            summary['reason'] = 'Script file or working directory is unavailable.'
+        return summary
+
+    def list_registered_scripts(self):
+        with self.lock:
+            return [
+                self._registered_script_summary(name, item)
+                for name, item in self.custom_scripts.items()
+            ]
+
+    def register_script(self, name, path, working_directory, label=None):
+        if not isinstance(name, str) or not COMMAND_PATTERN.fullmatch(name):
+            raise ValueError('Script command name must use lowercase letters, numbers, and hyphens, and start with a letter.')
+        if not isinstance(label, str) or not label.strip() or len(label.strip()) > 80:
+            raise ValueError('Enter a display name of 1 to 80 characters.')
+        resolved = self._validate_script_path(path)
+        cwd = self._validate_working_directory(working_directory)
+        discovered = self._discover_scripts()
+        with self.lock:
+            if name in discovered or name in self.custom_scripts:
+                raise ValueError(f'A script named {name!r} is already available.')
+            if any(Path(item['path']).resolve() == resolved for item in (*discovered.values(), *self.custom_scripts.values())):
+                raise ValueError('This script is already registered.')
+            item = {
+                'label': label.strip(),
+                'path': resolved,
+                'working_directory': cwd,
+                'description': f'Registered script · {resolved}',
+                'registered': True,
+                'output_dirs': [],
+            }
+            updated = {**self.custom_scripts, name: item}
+            self._save_registered_scripts(updated)
+            self.custom_scripts = updated
+            self.registry = self._build_registry(discovered)
+            return self._registered_script_summary(name, item)
+
+    def relink_registered_script(self, name, path):
+        resolved = self._validate_script_path(path)
+        with self.lock:
+            if name not in self.custom_scripts:
+                raise ValueError('Unknown registered script.')
+            discovered = self._discover_scripts()
+            old = self.custom_scripts[name]
+            if any(
+                other_name != name and Path(item['path']).resolve() == resolved
+                for other_name, item in {**discovered, **self.custom_scripts}.items()
+            ):
+                raise ValueError('This script is already registered under another name.')
+            item = dict(old)
+            if Path(old['working_directory']) == Path(old['path']).parent:
+                item['working_directory'] = resolved.parent
+            item['path'] = resolved
+            updated = {**self.custom_scripts, name: item}
+            self._save_registered_scripts(updated)
+            self.custom_scripts = updated
+            self.registry = self._build_registry(discovered)
+            return self._registered_script_summary(name, item)
+
+    def remove_registered_script(self, name):
+        with self.lock:
+            if name not in self.custom_scripts:
+                raise ValueError('Unknown registered script.')
+            discovered = self._discover_scripts()
+            updated = {key: item for key, item in self.custom_scripts.items() if key != name}
+            self._save_registered_scripts(updated)
+            self.custom_scripts = updated
+            self.registry = self._build_registry(discovered)
+        return {'ok': True}
+
     def catalog(self):
         with self.lock:
             return self._catalog_entries()
@@ -122,20 +302,21 @@ class Engine:
         return [
             {'name': name, 'label': item['label'], 'description': item['description']}
             for name, item in self.registry.items()
+            if self._script_available(item)
         ]
 
     def reload_catalog(self):
-        registry = self._discover_scripts()
+        discovered = self._discover_scripts()
         with self.lock:
-            self.registry = registry
+            self.registry = self._build_registry(discovered)
             return self._catalog_entries()
 
     def edit_script(self, name):
         with self.lock:
             if not isinstance(name, str) or name not in self.registry:
                 raise ValueError('Unknown script. Reload the catalog and select an approved script.')
-            path = self.registry[name]['path'].resolve(strict=True)
-        if path.parent != SCRIPT_DIR.resolve() or not path.is_file() or path.suffix.lower() != '.py':
+            path = Path(self.registry[name]['path']).resolve(strict=True)
+        if not path.is_file() or path.suffix.lower() != '.py':
             raise ValueError('Selected script is missing or invalid.')
         if os.name == 'nt':
             subprocess.Popen(['notepad.exe', str(path)])
@@ -183,9 +364,11 @@ class Engine:
         with self.lock:
             if not isinstance(name, str) or name not in self.registry:
                 raise ValueError('Unknown job. Use the catalog to select an approved script.')
+            script = self.registry[name]
+            if not self._script_available(script):
+                raise ValueError('Selected script or working directory is unavailable.')
 
             job_id = uuid.uuid4().hex[:10]
-            script = self.registry[name]
             avg = self._average_for(name)
             job = dict(
                 id=job_id,
@@ -213,6 +396,7 @@ class Engine:
                 arguments=list(arguments),
             )
             self.jobs[job_id] = job
+            self.audit_session_job_ids.add(job_id)
             self.job_scripts[job_id] = script
             self.job_arguments[job_id] = tuple(arguments)
             self._event(job, 'queued', 'Job accepted')
@@ -222,6 +406,7 @@ class Engine:
                 for key in list(self.jobs):
                     if self.jobs[key]['status'] not in ('queued', 'running', 'cancelling'):
                         del self.jobs[key]
+                        self.audit_session_job_ids.discard(key)
                         self.job_scripts.pop(key, None)
                         self.job_arguments.pop(key, None)
                         break
@@ -260,11 +445,16 @@ class Engine:
             job = self.jobs.get(job_id)
             if not job:
                 return
-            path = self.job_scripts[job_id]['path'].resolve()
+            script = self.job_scripts[job_id]
+            path = Path(script['path']).resolve()
+            working_directory = Path(script.get('working_directory', ROOT)).resolve()
             arguments = self.job_arguments[job_id]
-            if path.parent != SCRIPT_DIR.resolve() or not path.is_file():
+            if not self._script_available(script):
                 job['status'] = 'failed'
+                job['ended'] = stamp()
                 self._event(job, 'error', 'Approved script missing or invalid')
+                self._save(job)
+                self._auto_save_session()
                 self._drain_queue()
                 return
             job['status'] = 'running'
@@ -275,7 +465,7 @@ class Engine:
         try:
             proc = subprocess.Popen(
                 [sys.executable, '-u', str(path), *arguments],
-                cwd=str(ROOT),
+                cwd=str(working_directory),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -521,6 +711,98 @@ class Engine:
             pass
         return records
 
+    def audit_current_session(self):
+        """Return jobs started during this app launch, excluding restored workspace jobs."""
+        with self.lock:
+            current_jobs = [
+                job for job_id, job in self.jobs.items()
+                if job_id in self.audit_session_job_ids
+            ]
+            return json.loads(json.dumps(list(reversed(current_jobs))))
+
+    def search_audit(self, query, limit=100):
+        """Search saved job snapshots and history records for prior runs."""
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError('Enter a search term to search stored runs.')
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('Search limit must be a positive integer.') from exc
+        if limit < 1:
+            raise ValueError('Search limit must be a positive integer.')
+        limit = min(limit, 100)
+        terms = query.casefold().split()
+
+        with self.lock:
+            current_job_ids = set(self.audit_session_job_ids)
+
+        records = {}
+        warnings = []
+
+        def add_record(record):
+            if not isinstance(record, dict):
+                return
+            job_id = record.get('id') or record.get('job_id')
+            if not isinstance(job_id, str) or not job_id or job_id in current_job_ids:
+                return
+            normalized = dict(record)
+            normalized.setdefault('id', job_id)
+            normalized.setdefault('status', 'completed')
+            records.setdefault(job_id, normalized)
+
+        def add_session_file(path):
+            try:
+                data = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, json.JSONDecodeError) as exc:
+                warnings.append(f'{path.name}: {exc}')
+                return
+            if isinstance(data, dict):
+                session_jobs = data.get('jobs') or []
+                if isinstance(session_jobs, list):
+                    for record in session_jobs:
+                        add_record(record)
+                else:
+                    warnings.append(f'{path.name}: jobs must be a list.')
+
+        for path in RUN_DIR.glob('*.json'):
+            if path.name in (SESSION_FILE.name, REGISTERED_SCRIPTS_FILE.name):
+                continue
+            try:
+                add_record(json.loads(path.read_text(encoding='utf-8')))
+            except (OSError, json.JSONDecodeError) as exc:
+                warnings.append(f'{path.name}: {exc}')
+
+        if SESSION_FILE.exists():
+            add_session_file(SESSION_FILE)
+        if SESSIONS_DIR.exists():
+            for path in SESSIONS_DIR.glob('*.json'):
+                add_session_file(path)
+
+        if HISTORY_FILE.exists():
+            try:
+                for line in HISTORY_FILE.read_text(encoding='utf-8').splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        warnings.append(f'{HISTORY_FILE.name}: skipped an invalid record.')
+                        continue
+                    add_record(record)
+            except OSError as exc:
+                warnings.append(f'{HISTORY_FILE.name}: {exc}')
+
+        matching = []
+        for record in records.values():
+            searchable = json.dumps(record, ensure_ascii=False, default=str).casefold()
+            if all(term in searchable for term in terms):
+                matching.append(record)
+        matching.sort(
+            key=lambda record: str(record.get('ended') or record.get('started') or ''),
+            reverse=True,
+        )
+        return {'jobs': matching[:limit], 'count': len(matching), 'warnings': warnings}
+
     def compare_script(self, script_name, limit=10):
         """Return recent runs for a script plus average, useful for comparison UI."""
         runs = self.get_history(script_name=script_name, limit=limit)
@@ -679,6 +961,7 @@ class Engine:
             if any(j['status'] in ('running', 'cancelling', 'queued') for j in self.jobs.values()):
                 raise ValueError('Cannot load session while jobs are active. Stop or wait for them first.')
             self.jobs.clear()
+            self.audit_session_job_ids.clear()
             self.job_scripts.clear()
             self.job_arguments.clear()
             self.queue.clear()
@@ -732,6 +1015,7 @@ class Engine:
                     j['status'] = 'cancelled'
                     j['ended'] = stamp()
             self.jobs.clear()
+            self.audit_session_job_ids.clear()
             self.job_scripts.clear()
             self.job_arguments.clear()
             self._auto_save_session()

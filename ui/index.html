@@ -24,6 +24,66 @@ header .left,header .right{display:flex;align-items:center;gap:10px}
 .popup input[type=range]{width:100%}
 .popup select{width:100%}
 main{padding:22px;max-width:1800px;margin:auto}
+.page-view{flex:1;min-height:0}
+#execution-page{display:flex;flex-direction:column;overflow:hidden}
+#manage-work-page{overflow:auto;padding:8px 18px 24px 0;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--accent) 30%,transparent) transparent}
+#manage-work-page::-webkit-scrollbar{width:9px}
+#manage-work-page::-webkit-scrollbar-track{background:transparent}
+#manage-work-page::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:8px;background:color-mix(in srgb,var(--accent) 30%,transparent);background-clip:padding-box}
+#execution-page[hidden],#manage-work-page[hidden],#log-audit-page[hidden]{display:none}
+#manage-work-page:not([hidden]){display:flex;flex-direction:column}
+#log-audit-page{overflow:auto;padding:8px 18px 24px 0;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--accent) 30%,transparent) transparent}
+#log-audit-page::-webkit-scrollbar{width:9px}
+#log-audit-page::-webkit-scrollbar-track{background:transparent}
+#log-audit-page::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:8px;background:color-mix(in srgb,var(--accent) 30%,transparent);background-clip:padding-box}
+#log-audit-page:not([hidden]){display:flex;flex-direction:column}
+.manage-work-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin:12px 0 20px}
+.manage-work-head h1{margin:0;color:var(--accent);font-size:15px;letter-spacing:.12em}
+.manage-work-head p{margin:5px 0 0}
+.audit-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin:12px 0 18px}
+.audit-head h1{margin:0;color:var(--accent);font-size:15px;letter-spacing:.12em}
+.audit-head p{margin:5px 0 0}
+.audit-tabs,.audit-toolbar,.audit-search-form{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.audit-tabs{margin-bottom:12px}
+.audit-tabs button[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
+.audit-toolbar,.audit-search-form{padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
+.audit-toolbar input,.audit-search-form input{flex:1;min-width:180px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:#07101970;color:var(--text)}
+.audit-toolbar select{min-width:150px}
+.audit-note,.audit-status{margin:10px 0;color:var(--muted);font-size:12px}
+#audit-current-results,#audit-prior-results{display:grid;gap:10px;margin-top:12px}
+.audit-record{padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
+.audit-record-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.audit-record h2{margin:0;font-size:14px}
+.audit-record-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:5px;color:var(--muted);font-size:11px}
+.audit-record details{margin-top:12px;border-top:1px solid #ffffff12;padding-top:9px}
+.audit-record summary{color:var(--accent);cursor:pointer;font-size:12px}
+.audit-detail{margin-top:10px}
+.audit-detail h3{margin:0 0 5px;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.audit-detail pre{margin:0;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#afc8d3;font:11px/1.6 ui-monospace,Consolas,monospace}
+.audit-paths{margin:0;padding-left:18px;overflow-wrap:anywhere;color:#afc8d3;font:11px/1.6 ui-monospace,Consolas,monospace}
+.manage-work-form{max-width:760px;padding:18px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+.manage-work-form h2,.registered-scripts-section h2{margin:0 0 5px;color:var(--text);font-size:14px}
+.manage-work-form>p{margin:0 0 16px}
+.manage-field{display:flex;flex-direction:column;gap:5px;margin:12px 0}
+.manage-field>label{color:var(--muted);font-size:12px}
+.manage-field input{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:#07101970;color:var(--text)}
+.manage-field input[readonly]{overflow:hidden;text-overflow:ellipsis}
+.manage-path-row{display:flex;gap:8px}
+.manage-path-row button{flex:none}
+.manage-trust{display:flex;align-items:center;gap:8px;margin:16px 0;color:var(--muted);font-size:12px}
+.manage-trust input{accent-color:var(--accent)}
+#save-registered-script:disabled{opacity:.5;cursor:not-allowed}
+#manage-message{min-height:1.5em;margin:8px 0;color:var(--muted);font-size:12px}
+#manage-message.error{color:#ff9ca5}
+.registered-scripts-section{max-width:900px;margin-top:24px}
+#registered-scripts-list{display:grid;gap:8px;margin-top:10px}
+.registered-script{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
+.registered-script.unavailable{border-color:#ff9ca577}
+.registered-script h3{margin:0;font-size:13px}
+.registered-script p{margin:4px 0 0;color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+.registered-script code{font:11px ui-monospace,SFMono-Regular,Consolas,monospace}
+.registered-script-actions{display:flex;flex:none;gap:6px}
+.registered-script-actions button{padding:5px 8px;font-size:11px}
 .console{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 0 calc(var(--glow)*25px) color-mix(in srgb,var(--accent) 10%,transparent);overflow:hidden}
 .prompt{display:flex;align-items:flex-start;padding:14px 18px;gap:12px}
 .prompt strong{color:var(--accent);font:700 20px monospace}
@@ -66,23 +126,13 @@ body.compact .job{padding:10px}
   .brand{margin-right:0}
   .clock{font-size:11px}
   main{padding:12px}
+  .manage-work-head{align-items:flex-start}
+  .audit-head{align-items:flex-start}
+  .registered-script{flex-direction:column;gap:9px}
+  .registered-script-actions{align-self:flex-end}
 }
-.workspace-note{margin:-2px 0 16px;padding:12px 16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
-.workspace-note[hidden]{display:none}
-.workspace-note label{display:flex;justify-content:space-between;align-items:center;color:var(--accent);font-size:11px;letter-spacing:.12em}
-.workspace-note textarea,.job-note-text{display:block;width:100%;min-height:80px;max-height:none;margin-top:8px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#07101970;color:var(--text);font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical;overflow:auto}
-.note-toggle{min-width:32px;padding:3px 7px;color:var(--muted);line-height:1}
-.note-toggle.has-note{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 55%,transparent)}
-.note-toggle.has-note:after{content:'•';padding-left:3px;color:var(--accent)}
-.job-note h3{margin:0;color:var(--accent);font-size:12px;letter-spacing:.12em}
-.job-note-drawer{margin:0 12px 12px;padding:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
-.job-note-drawer .job-note{min-height:0;padding:0;border:0;background:transparent;box-shadow:none;backdrop-filter:none}
-.job-note-drawer[hidden]{display:none}
-.job-note-head{display:flex;justify-content:space-between;align-items:center}
-.job-note-drawer .job-note-text{min-height:96px}
 .panels{grid-template-columns:repeat(4,minmax(0,1fr))}
 .canvas-node .panels{grid-template-columns:repeat(3,minmax(0,1fr))}
-.workspace-note~#jobs{margin-top:0}
 @media(max-width:1200px){
   .panels{grid-template-columns:repeat(2,minmax(0,1fr))}
   .canvas-node .panels{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -113,6 +163,8 @@ body.compact .job{padding:10px}
       <button data-menu="layouts">▦ Layout ▾</button>
       <div id="layouts" class="popup" hidden><b>Organization</b><div id="layout-options"></div></div>
     </div>
+    <button id="manage-work-nav" type="button" aria-controls="manage-work-page" aria-pressed="false">Manage Work</button>
+    <button id="log-audit-nav" type="button" aria-controls="log-audit-page" aria-pressed="false">Log Audit</button>
   </div>
   <div class="right">
     <span id="clock" class="clock"></span>
@@ -136,13 +188,13 @@ body.compact .job{padding:10px}
         </label>
         <label><input id="glow" type="checkbox">Edge glow</label>
         <label><input id="compact" type="checkbox">Compact density</label>
-        <label><input id="show-workspace-note" type="checkbox">Show Workspace Note</label>
       </div>
     </div>
   </div>
 </header>
 
 <main>
+  <section id="execution-page" class="page-view">
   <section class="console">
     <div class="prompt">
       <strong>&gt;</strong>
@@ -160,16 +212,107 @@ body.compact .job{padding:10px}
     <button id="run-demo">▶ Run demo</button>
   </div>
 
-  <section class="workspace-note" id="workspace-note" hidden>
-    <label for="workspace-note-text">WORKSPACE NOTE <span class="subtle">Saved locally</span></label>
-    <textarea id="workspace-note-text" rows="3" spellcheck="false" placeholder="Capture your current focus or session-wide reminders…"></textarea>
-  </section>
-
   <section class="jobs connected" id="jobs">
     <div class="empty">Start an approved task to populate the workspace. Type <b>catalog</b> to see available jobs.</div>
   </section>
 
   <div class="foot">Local-only desktop workspace · Jobs run through an allowlisted Python engine · No HTTP listener</div>
+  </section>
+
+  <section id="manage-work-page" class="page-view manage-work-page" hidden>
+    <div class="manage-work-head">
+      <div>
+        <h1>MANAGE WORK</h1>
+        <p class="subtle">Register trusted Python scripts in place. ACW saves their paths; it does not copy or modify them.</p>
+      </div>
+      <button id="execution-page-nav" type="button">Back to workspace</button>
+    </div>
+    <form id="register-script-form" class="manage-work-form">
+      <h2>Add an available script</h2>
+      <p class="subtle">Scripts run with your Windows account permissions. Register only scripts you trust.</p>
+      <div class="manage-field">
+        <label for="registered-script-name">Command name</label>
+        <input id="registered-script-name" required pattern="[a-z][a-z0-9\-]*" maxlength="80" autocomplete="off">
+      </div>
+      <div class="manage-field">
+        <label for="registered-script-label">Display name</label>
+        <input id="registered-script-label" required maxlength="80" autocomplete="off">
+      </div>
+      <div class="manage-field">
+        <label for="registered-script-path">Python script</label>
+        <div class="manage-path-row">
+          <input id="registered-script-path" type="text" readonly required>
+          <button id="browse-script" type="button">Choose file…</button>
+        </div>
+      </div>
+      <div class="manage-field">
+        <label for="registered-script-cwd">Working directory</label>
+        <div class="manage-path-row">
+          <input id="registered-script-cwd" type="text" readonly required>
+          <button id="browse-working-directory" type="button">Choose folder…</button>
+        </div>
+        <span class="subtle">Defaults to the script’s folder. Change it if the script expects another working directory.</span>
+      </div>
+      <label class="manage-trust"><input id="trust-script" type="checkbox" required> I trust this script to run with my account permissions.</label>
+      <button id="save-registered-script" type="submit" disabled>Add script</button>
+      <div id="manage-message" role="status" aria-live="polite"></div>
+    </form>
+    <section class="registered-scripts-section" aria-labelledby="registered-scripts-heading">
+      <h2 id="registered-scripts-heading">Registered scripts</h2>
+      <div id="registered-scripts-list" aria-live="polite"></div>
+    </section>
+  </section>
+
+  <section id="log-audit-page" class="page-view" hidden>
+    <div class="audit-head">
+      <div>
+        <h1>LOG AUDIT</h1>
+        <p class="subtle">Read-only search of available job output, events, errors, artifacts, and paths.</p>
+      </div>
+      <button id="audit-back-nav" type="button">Back to workspace</button>
+    </div>
+    <div class="audit-tabs" role="group" aria-label="Audit data source">
+      <button type="button" data-audit-view="current" aria-pressed="true">Current session</button>
+      <button type="button" data-audit-view="prior" aria-pressed="false">Search stored runs</button>
+    </div>
+    <section id="audit-current-panel">
+      <div class="audit-toolbar">
+        <input id="audit-current-search" type="search" aria-label="Filter current session jobs" placeholder="Filter by script, error, path, output, or job ID">
+        <select id="audit-current-status" aria-label="Filter current session by status">
+          <option value="all">All statuses</option>
+          <option value="running">Running</option>
+          <option value="queued">Queued</option>
+          <option value="cancelling">Cancelling</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+          <option value="cancelled">Cancelled</option>
+          <option value="interrupted">Interrupted</option>
+        </select>
+        <button id="audit-refresh-current" type="button">Refresh</button>
+      </div>
+      <p class="audit-note">Shows jobs started since this app was opened. Jobs restored from an earlier launch are not included.</p>
+      <div id="audit-current-results" aria-live="polite"></div>
+    </section>
+    <section id="audit-prior-panel" hidden>
+      <form id="audit-search-form" class="audit-search-form">
+        <input id="audit-prior-search" type="search" required aria-label="Search stored runs" placeholder="Search script, errors, paths, output, or job ID">
+        <select id="audit-prior-filter-status" aria-label="Filter matching stored runs by status">
+          <option value="all">All statuses</option>
+          <option value="running">Running</option>
+          <option value="queued">Queued</option>
+          <option value="cancelling">Cancelling</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+          <option value="cancelled">Cancelled</option>
+          <option value="interrupted">Interrupted</option>
+        </select>
+        <button type="submit">Search stored runs</button>
+      </form>
+      <p class="audit-note">Search only checks data ACW already saved. Older failure details may be unavailable; this is not a complete archive.</p>
+      <p id="audit-prior-status" class="audit-status" role="status" aria-live="polite"></p>
+      <div id="audit-prior-results" aria-live="polite"></div>
+    </section>
+  </section>
 </main>
 
 <script src="app.js"></script>
