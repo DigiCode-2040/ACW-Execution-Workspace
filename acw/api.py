@@ -126,11 +126,7 @@ class API:
         return self.engine.compare_script(script_name, limit)
 
     def exit_app(self):
-        # Persist session before exit
-        try:
-            self.engine._auto_save_session()
-        except Exception:
-            pass
+        self.engine._auto_save_session()
         import webview
         if not webview.windows:
             raise RuntimeError('No application window is available to close.')

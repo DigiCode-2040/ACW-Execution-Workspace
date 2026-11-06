@@ -657,6 +657,19 @@ class Engine:
         job['events'].append({'time': stamp(), 'kind': kind, 'message': str(message)[:500]})
         job['events'] = job['events'][-MAX_LINES:]
 
+    def _record_stage_timing(self, job):
+        stage = job.get('stage')
+        stage_started = job.get('stage_started')
+        if not stage or not stage_started:
+            return
+        try:
+            started_at = DateTime_parse(stage_started)
+            duration = (datetime.now(timezone.utc) - started_at).total_seconds()
+        except (AttributeError, TypeError, ValueError) as exc:
+            self._event(job, 'warning', f'Unable to record timing for stage {stage}: {exc}')
+            return
+        job['stage_timings'][stage] = round(duration, 2)
+
     def _run(self, job_id):
         with self.lock:
             job = self.jobs.get(job_id)
@@ -785,14 +798,7 @@ class Engine:
                 job['exit_code'] = proc.returncode
                 job['ended'] = stamp()
                 job['eta_seconds'] = None
-                # Close out final stage timing
-                if job.get('stage_started') and job.get('stage'):
-                    try:
-                        st = DateTime_parse(job['stage_started'])
-                        duration = (datetime.now(timezone.utc) - st).total_seconds()
-                        job['stage_timings'][job['stage']] = round(duration, 2)
-                    except Exception:
-                        pass
+                self._record_stage_timing(job)
                 job['status'] = (
                     'cancelled' if job['status'] == 'cancelling'
                     else ('completed' if proc.returncode == 0 else 'failed')
@@ -835,12 +841,7 @@ class Engine:
                             new_stage = str(data['stage'])[:100]
                             # Record previous stage duration
                             if job.get('stage_started') and job.get('stage') and job['stage'] != new_stage:
-                                try:
-                                    st = DateTime_parse(job['stage_started'])
-                                    duration = (datetime.now(timezone.utc) - st).total_seconds()
-                                    job['stage_timings'][job['stage']] = round(duration, 2)
-                                except Exception:
-                                    pass
+                                self._record_stage_timing(job)
                                 job['stage_started'] = stamp()
                             elif not job.get('stage_started'):
                                 job['stage_started'] = stamp()
