@@ -134,7 +134,7 @@ function jobDetails(j){
   const events=(j.events||[]).filter(event=>event.kind!=='output').slice(-6).map(e=>escapeHTML(e.kind+': '+e.message)).join('\n');
   const finished=['completed','failed','cancelled'].includes(j.status);
   const artifacts=finished?(j.artifacts||[]).map(artifact=>`<div class="artifact-row"><span title="${escapeHTML(artifact)}">${escapeHTML(artifact)}</span><button class="artifact-action" aria-label="Open artifact ${escapeHTML(artifact)}" data-action="open" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Open</button><button class="artifact-action" aria-label="Reveal artifact ${escapeHTML(artifact)}" data-action="reveal" data-job-id="${escapeHTML(j.id)}" data-artifact="${escapeHTML(artifact)}">Reveal</button></div>`).join(''):'';
-  const currentStageElapsed=stageElapsed(j.stage_started);
+  const currentStageElapsed=finished?null:stageElapsed(j.stage_started);
   const stageTimingsHtml=Object.entries(j.stage_timings||{}).map(([stageName,secs])=>
     `<div class="stage-timing"><span>${escapeHTML(stageName)}</span><span>${Number(secs).toFixed(1)}s</span></div>`
   ).join('');

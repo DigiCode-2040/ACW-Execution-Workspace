@@ -799,6 +799,7 @@ class Engine:
                 job['ended'] = stamp()
                 job['eta_seconds'] = None
                 self._record_stage_timing(job)
+                job['stage_started'] = None
                 job['status'] = (
                     'cancelled' if job['status'] == 'cancelling'
                     else ('completed' if proc.returncode == 0 else 'failed')
@@ -816,6 +817,8 @@ class Engine:
             with self.lock:
                 job = self.jobs.get(job_id)
                 if job:
+                    self._record_stage_timing(job)
+                    job['stage_started'] = None
                     job['status'] = 'failed'
                     job['ended'] = stamp()
                     self._event(job, 'error', str(exc))

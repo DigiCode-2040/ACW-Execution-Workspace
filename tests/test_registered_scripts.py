@@ -467,6 +467,8 @@ class RegisteredScriptTests(unittest.TestCase):
 
         self.assertEqual(popen.call_args.kwargs['cwd'], str(self.external_directory.resolve()))
         self.assertEqual(self.engine.jobs[job_id]['status'], 'completed')
+        self.assertIsNone(self.engine.jobs[job_id]['stage_started'])
+        self.assertIn('Queued', self.engine.jobs[job_id]['stage_timings'])
 
 
 if __name__ == '__main__':
