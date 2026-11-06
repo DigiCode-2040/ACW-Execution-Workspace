@@ -3,6 +3,7 @@ const defaults={theme:'cyan',layout:'collapsed',historyCount:5,opacity:78,glow:t
 let prefs={...defaults}, jobs=[], history=[], catalogEntries=[], bridgeReady=false, busy=false;
 let commandHistory=[],commandHistoryIndex=0,commandDraft='',jobStatusFilter='all',jobSearch='';
 let auditCurrentJobs=[],auditCurrentIds=new Set(),auditPriorJobs=[],auditPriorCount=0,auditPriorWarnings=0,auditTargetId=null;
+const auditDetailsOpen=new Set();
 try{prefs={...defaults,...JSON.parse(localStorage.getItem('acw.preferences')||'{}')}}catch{}
 if(!['collapsed','canvas'].includes(prefs.layout))prefs.layout='collapsed';
 if(!prefs.canvasPositions||typeof prefs.canvasPositions!=='object')prefs.canvasPositions={};
@@ -38,7 +39,16 @@ function auditRecordMarkup(job){
     artifacts.length?`<section class="audit-detail"><h3>Reported artifacts and paths</h3><ul class="audit-paths">${artifacts.map(path=>`<li>${escapeHTML(path)}</li>`).join('')}</ul></section>`:'',
     !output&&!events&&!artifacts.length?'<p class="subtle">This stored record has summary data only.</p>':''
   ].join('');
-  return `<article class="audit-record"><div class="audit-record-head"><div><h2>${escapeHTML(job.label||job.name||'Unknown job')} ${kindBadge(job.kind)}</h2><div class="audit-record-meta"><span>${escapeHTML(job.name||'')}</span><span class="pill ${escapeHTML(status)}">${escapeHTML(status)}</span><span>ID ${escapeHTML(id)}</span></div></div></div><div class="audit-record-meta"><span>Started: ${escapeHTML(job.started||'—')}</span><span>Ended: ${escapeHTML(job.ended||'—')}</span><span>Runtime: ${escapeHTML(job.runtime==null?'—':formatRuntime(job.runtime))}</span><span>Exit code: ${escapeHTML(job.exit_code??'—')}</span></div><details${id===auditTargetId?' open':''}><summary>View stored details</summary>${details}</details></article>`;
+  return `<article class="audit-record"><div class="audit-record-head"><div><h2>${escapeHTML(job.label||job.name||'Unknown job')} ${kindBadge(job.kind)}</h2><div class="audit-record-meta"><span>${escapeHTML(job.name||'')}</span><span class="pill ${escapeHTML(status)}">${escapeHTML(status)}</span><span>ID ${escapeHTML(id)}</span></div></div></div><div class="audit-record-meta"><span>Started: ${escapeHTML(job.started||'—')}</span><span>Ended: ${escapeHTML(job.ended||'—')}</span><span>Runtime: ${escapeHTML(job.runtime==null?'—':formatRuntime(job.runtime))}</span><span>Exit code: ${escapeHTML(job.exit_code??'—')}</span></div><details data-audit-detail="${escapeHTML(id)}"${auditDetailsOpen.has(id)?' open':''}><summary>View stored details</summary>${details}</details></article>`;
+}
+function bindAuditDetails(root){
+  root.querySelectorAll('details[data-audit-detail]').forEach(details=>{
+    details.ontoggle=()=>{
+      const id=details.dataset.auditDetail;
+      if(details.open)auditDetailsOpen.add(id);
+      else auditDetailsOpen.delete(id);
+    };
+  });
 }
 function auditSearchMatches(job,query){
   const terms=query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
@@ -53,6 +63,7 @@ function renderAuditCurrent(){
   if(auditTargetId)matches=matches.filter(job=>job.id===auditTargetId);
   $('audit-current-results').innerHTML=matches.map(auditRecordMarkup).join('')||
     `<div class="empty">${auditTargetId?'This job is not part of the current app session.':'No current-session jobs match these filters.'}</div>`;
+  bindAuditDetails($('audit-current-results'));
 }
 async function refreshAuditCurrent(){
   if(!bridgeReady)return;
@@ -71,6 +82,7 @@ function renderAuditPrior(){
   const matches=auditPriorJobs.filter(job=>status==='all'||job.status===status);
   results.innerHTML=matches.map(auditRecordMarkup).join('')||
     '<div class="empty">No stored runs match this search.</div>';
+  bindAuditDetails(results);
   $('audit-prior-status').textContent=`${matches.length} shown of ${auditPriorCount} matching stored run${auditPriorCount===1?'':'s'}${auditPriorWarnings?` · ${auditPriorWarnings} unreadable record(s) were skipped`:''}`;
 }
 function selectAuditView(view){
@@ -103,6 +115,7 @@ async function searchPriorAudit(query){
 }
 async function openJobAudit(jobId){
   auditTargetId=jobId;
+  auditDetailsOpen.add(jobId);
   setPage('audit');
   await refreshAuditCurrent();
   if(auditCurrentIds.has(jobId)){
