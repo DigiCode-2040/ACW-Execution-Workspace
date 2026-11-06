@@ -17,6 +17,10 @@ brandLogo.src='acw-logo.png';
 const monLabels={cpu:'CPU utilization',systemmem:'System memory*',taskmem:'Task memory',started:'Started',ended:'Ended',runtime:'Runtime',events:'Events',quality:'Quality'};
 const statusSymbols={running:'●',queued:'○',cancelling:'Ⅱ',completed:'✓',failed:'!',cancelled:'—'};
 function statusSymbol(status){return statusSymbols[status]||'·'}
+function kindBadge(kind){
+  const label=kind==='batch'?'BAT':'PY';
+  return `<span class="kind-badge" title="${label==='BAT'?'Windows batch':'Python'}">${label}</span>`;
+}
 const palettes={cyan:['#4ee6ef','#071019','#112736'],violet:['#bca3ff','#100d1c','#29203b'],green:['#78e4ac','#091712','#16362b'],amber:['#ffc36c','#1a130b','#3a2b1b']};
 function save(){try{localStorage.setItem('acw.preferences',JSON.stringify(prefs))}catch{}}
 function apply(){const [accent,bg,surface]=palettes[prefs.theme]||palettes.cyan;const r=document.documentElement.style;r.setProperty('--accent',accent);r.setProperty('--bg',bg);r.setProperty('--surface',surface);r.setProperty('--glow',prefs.glow?'1':'0');r.setProperty('--glass',prefs.opacity+'%');r.setProperty('--surface',`color-mix(in srgb, ${surface} ${prefs.opacity}%, transparent)`);document.body.classList.toggle('compact',prefs.compact);document.body.classList.toggle('connected-layout',prefs.layout==='collapsed');$('jobs').className='jobs '+(prefs.layout==='collapsed'?'connected':prefs.layout);document.querySelectorAll('[name=layout]').forEach(input=>input.checked=input.value===prefs.layout);$('theme').value=prefs.theme;$('history-count').value=prefs.historyCount;$('hist-val').textContent=prefs.historyCount;$('opacity').value=prefs.opacity;$('opacity-val').textContent=prefs.opacity+'%';$('glow').checked=prefs.glow;$('compact').checked=prefs.compact;renderHistory();renderJobs();save()}
@@ -35,7 +39,7 @@ function auditRecordMarkup(job){
     artifacts.length?`<section class="audit-detail"><h3>Reported artifacts and paths</h3><ul class="audit-paths">${artifacts.map(path=>`<li>${escapeHTML(path)}</li>`).join('')}</ul></section>`:'',
     !output&&!events&&!artifacts.length?'<p class="subtle">This stored record has summary data only.</p>':''
   ].join('');
-  return `<article class="audit-record"><div class="audit-record-head"><div><h2>${escapeHTML(job.label||job.name||'Unknown job')}</h2><div class="audit-record-meta"><span>${escapeHTML(job.name||'')}</span><span class="pill ${escapeHTML(status)}">${escapeHTML(status)}</span><span>ID ${escapeHTML(id)}</span></div></div></div><div class="audit-record-meta"><span>Started: ${escapeHTML(job.started||'—')}</span><span>Ended: ${escapeHTML(job.ended||'—')}</span><span>Runtime: ${escapeHTML(job.runtime==null?'—':formatRuntime(job.runtime))}</span><span>Exit code: ${escapeHTML(job.exit_code??'—')}</span></div><details${id===auditTargetId?' open':''}><summary>View stored details</summary>${details}</details></article>`;
+  return `<article class="audit-record"><div class="audit-record-head"><div><h2>${escapeHTML(job.label||job.name||'Unknown job')} ${kindBadge(job.kind)}</h2><div class="audit-record-meta"><span>${escapeHTML(job.name||'')}</span><span class="pill ${escapeHTML(status)}">${escapeHTML(status)}</span><span>ID ${escapeHTML(id)}</span></div></div></div><div class="audit-record-meta"><span>Started: ${escapeHTML(job.started||'—')}</span><span>Ended: ${escapeHTML(job.ended||'—')}</span><span>Runtime: ${escapeHTML(job.runtime==null?'—':formatRuntime(job.runtime))}</span><span>Exit code: ${escapeHTML(job.exit_code??'—')}</span></div><details${id===auditTargetId?' open':''}><summary>View stored details</summary>${details}</details></article>`;
 }
 function auditSearchMatches(job,query){
   const terms=query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
@@ -240,7 +244,7 @@ function renderJobs(){
     el.innerHTML=matches.map(job=>{
       const progress=Math.max(0,Math.min(100,Number(job.progress)||0));
       const expanded=connectedExpanded.has(job.id);
-      return `<article class="job connected-job status-${escapeHTML(job.status)}"><div class="connected-job-row"><div class="connected-job-name"><span class="connected-status-dot" aria-hidden="true"></span><div><b>${escapeHTML(job.label)}</b><span>${escapeHTML(job.name)} · ${escapeHTML(job.stage||job.status)}</span></div></div><span class="connected-job-runtime">${formatRuntime(job.runtime)}</span><div class="connected-progress" role="progressbar" aria-label="Progress for ${escapeHTML(job.label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span><i style="width:${progress}%"></i></span><b>${progress}%</b></div><span class="pill ${escapeHTML(job.status)}"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span><div class="connected-job-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}<button class="job-audit-button" type="button" data-audit-job="${escapeHTML(job.id)}" title="View this job in Log Audit">Audit</button><button class="connected-details-toggle" type="button" data-job-details="${escapeHTML(job.id)}" aria-label="${expanded?'Hide':'Show'} details for ${escapeHTML(job.label)}" aria-expanded="${expanded}">${expanded?'−':'+'}</button></div></div><div class="connected-job-details"${expanded?'':' hidden'}>${jobDetails(job)}</div></article>`;
+      return `<article class="job connected-job status-${escapeHTML(job.status)}"><div class="connected-job-row"><div class="connected-job-name"><span class="connected-status-dot" aria-hidden="true"></span><div><b>${escapeHTML(job.label)} ${kindBadge(job.kind)}</b><span>${escapeHTML(job.name)} · ${escapeHTML(job.stage||job.status)}</span></div></div><span class="connected-job-runtime">${formatRuntime(job.runtime)}</span><div class="connected-progress" role="progressbar" aria-label="Progress for ${escapeHTML(job.label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span><i style="width:${progress}%"></i></span><b>${progress}%</b></div><span class="pill ${escapeHTML(job.status)}"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span><div class="connected-job-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}<button class="job-audit-button" type="button" data-audit-job="${escapeHTML(job.id)}" title="View this job in Log Audit">Audit</button><button class="connected-details-toggle" type="button" data-job-details="${escapeHTML(job.id)}" aria-label="${expanded?'Hide':'Show'} details for ${escapeHTML(job.label)}" aria-expanded="${expanded}">${expanded?'−':'+'}</button></div></div><div class="connected-job-details"${expanded?'':' hidden'}>${jobDetails(job)}</div></article>`;
     }).join('');
   }else if(prefs.layout==='canvas'){
     const positions=matches.map(job=>canvasPosition(job,Math.max(0,jobs.findIndex(candidate=>candidate.id===job.id))));
@@ -251,7 +255,7 @@ function renderJobs(){
       const progress=Math.max(0,Math.min(100,Number(job.progress)||0));
       const position=positions[index];
       const expanded=canvasExpanded.has(job.id);
-      return `<article class="job canvas-node ${escapeHTML(job.status)} status-${escapeHTML(job.status)}${expanded?' expanded':''}" data-job-id="${escapeHTML(job.id)}" style="--node-x:${position.x}px;--node-y:${position.y}px;--progress-angle:${progress*3.6}deg"><div class="canvas-node-head"><div class="canvas-node-grab" title="Drag to arrange this job"><button class="canvas-expand" aria-expanded="${expanded}" aria-label="${expanded?'Collapse':'Expand'} details for ${escapeHTML(job.label)}"><span class="progress-ring" aria-hidden="true"></span><span class="canvas-node-copy"><b>${escapeHTML(job.label)}</b><span class="canvas-stage">${escapeHTML(job.stage||job.status)} · ${progress}%</span></span></button><span class="canvas-node-status"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span></div><div class="canvas-node-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}<button class="job-audit-button" type="button" data-audit-job="${escapeHTML(job.id)}" title="View this job in Log Audit">Audit</button><span class="meta">#${escapeHTML(job.id)}</span></div></div>${jobDetails(job)}</article>`;
+      return `<article class="job canvas-node ${escapeHTML(job.status)} status-${escapeHTML(job.status)}${expanded?' expanded':''}" data-job-id="${escapeHTML(job.id)}" style="--node-x:${position.x}px;--node-y:${position.y}px;--progress-angle:${progress*3.6}deg"><div class="canvas-node-head"><div class="canvas-node-grab" title="Drag to arrange this job"><button class="canvas-expand" aria-expanded="${expanded}" aria-label="${expanded?'Collapse':'Expand'} details for ${escapeHTML(job.label)}"><span class="progress-ring" aria-hidden="true"></span><span class="canvas-node-copy"><b>${escapeHTML(job.label)} ${kindBadge(job.kind)}</b><span class="canvas-stage">${escapeHTML(job.stage||job.status)} · ${progress}%</span></span></button><span class="canvas-node-status"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span></div><div class="canvas-node-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}<button class="job-audit-button" type="button" data-audit-job="${escapeHTML(job.id)}" title="View this job in Log Audit">Audit</button><span class="meta">#${escapeHTML(job.id)}</span></div></div>${jobDetails(job)}</article>`;
     }).join('')}</div></div>`;
     el.querySelectorAll('.canvas-node').forEach(node=>{
       const id=node.dataset.jobId;
@@ -516,7 +520,7 @@ async function refreshCatalog(reload=false){
   const select=$('run-script');
   select.replaceChildren(...catalogEntries.map(entry=>{
     const option=document.createElement('option');
-    option.value=entry.name;option.textContent=`${entry.label} (${entry.name})`;option.title=entry.description;
+    option.value=entry.name;option.textContent=`${entry.kind==='batch'?'BAT':'PY'} · ${entry.label} (${entry.name})`;option.title=entry.description;
     return option;
   }));
   if(catalogEntries.some(entry=>entry.name===previousSelection))select.value=previousSelection;
@@ -552,7 +556,7 @@ async function loadRegisteredScripts(){
   try{
     const scripts=await window.pywebview.api.registered_scripts();
     const list=$('registered-scripts-list');
-    list.innerHTML=scripts.map(script=>`<article class="registered-script${script.available?'':' unavailable'}"><div><h3>${escapeHTML(script.label)} <span class="subtle">(${escapeHTML(script.name)})</span></h3><p>${script.available?'Available':escapeHTML(script.reason||'Unavailable')}</p><p>Script: <code>${escapeHTML(script.path)}</code></p><p>Working directory: <code>${escapeHTML(script.working_directory)}</code></p></div><div class="registered-script-actions">${script.available?'':`<button type="button" data-relink-script="${escapeHTML(script.name)}">Relink…</button>`}<button type="button" data-remove-script="${escapeHTML(script.name)}">Remove</button></div></article>`).join('')||'<p class="subtle">No external scripts registered yet.</p>';
+    list.innerHTML=scripts.map(script=>`<article class="registered-script${script.available?'':' unavailable'}"><div><h3>${escapeHTML(script.label)} ${kindBadge(script.kind)} <span class="subtle">(${escapeHTML(script.name)})</span></h3><p>${script.available?'Available':escapeHTML(script.reason||'Unavailable')}</p><p>${escapeHTML(script.description||'')}</p><p>Script: <code>${escapeHTML(script.path)}</code></p><p>Working directory: <code>${escapeHTML(script.working_directory)}</code></p></div><div class="registered-script-actions">${script.available?'':`<button type="button" data-relink-script="${escapeHTML(script.name)}">Relink…</button>`}<button type="button" data-remove-script="${escapeHTML(script.name)}">Remove</button></div></article>`).join('')||'<p class="subtle">No external scripts registered yet.</p>';
     list.querySelectorAll('[data-relink-script]').forEach(button=>button.onclick=async()=>{
       try{
         const selected=await window.pywebview.api.choose_script_file();
@@ -586,6 +590,7 @@ function setupManageWork(){
       if(!selected)return;
       $('registered-script-name').value=selected.name;
       $('registered-script-label').value=selected.label;
+      $('registered-script-description').value=selected.description||'';
       $('registered-script-path').value=selected.path;
       $('registered-script-cwd').value=selected.working_directory;
       updateRegistrationForm();
@@ -607,6 +612,8 @@ function setupManageWork(){
         $('registered-script-path').value,
         $('registered-script-cwd').value,
         $('registered-script-label').value.trim(),
+        $('registered-script-description').value.trim(),
+        $('trust-script').checked,
       );
       await refreshCatalog();
       await loadRegisteredScripts();

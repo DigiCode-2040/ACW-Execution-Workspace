@@ -1,8 +1,8 @@
-"""Narrow pywebview bridge: never expose arbitrary shell execution."""
+"""Narrow pywebview bridge for approved scripts; expose no free-form commands."""
 from pathlib import Path
 import re
 
-from acw.engine import Engine
+from acw.engine import Engine, parse_acw_header
 
 
 class API:
@@ -35,19 +35,27 @@ class API:
         selection = webview.windows[0].create_file_dialog(
             webview.FileDialog.OPEN,
             allow_multiple=False,
-            file_types=('Python files (*.py)',),
+            file_types=('Scripts (*.py;*.bat;*.cmd)',),
         )
         if not selection:
             return None
         path = Path(selection[0]).expanduser()
-        stem = re.sub(r'[^a-z0-9]+', '-', path.stem.lower()).strip('-') or 'script'
+        metadata = parse_acw_header(path)
+        stem = metadata.get('command') or re.sub(
+            r'[^a-z0-9]+', '-', path.stem.lower()
+        ).strip('-') or 'script'
         if not stem[0].isalpha():
             stem = 'script-' + stem
+        kind = 'python' if path.suffix.lower() == '.py' else 'batch'
         return {
             'path': str(path),
             'working_directory': str(path.parent),
             'name': stem,
-            'label': path.stem.replace('-', ' ').replace('_', ' ').title(),
+            'label': metadata.get('label')
+            or path.stem.replace('-', ' ').replace('_', ' ').title(),
+            'description': metadata.get('description', ''),
+            'output_dirs': metadata.get('output_dir', []),
+            'kind': kind,
         }
 
     def choose_working_directory(self, directory=None):
@@ -65,8 +73,12 @@ class API:
     def registered_scripts(self):
         return self.engine.list_registered_scripts()
 
-    def register_script(self, name, path, working_directory, label):
-        return self.engine.register_script(name, path, working_directory, label)
+    def register_script(
+        self, name, path, working_directory, label, description, trusted
+    ):
+        return self.engine.register_script(
+            name, path, working_directory, label, description, trusted
+        )
 
     def relink_registered_script(self, name, path):
         return self.engine.relink_registered_script(name, path)

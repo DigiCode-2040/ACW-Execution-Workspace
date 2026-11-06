@@ -72,6 +72,7 @@ main{padding:22px;max-width:1800px;margin:auto}
 .manage-path-row button{flex:none}
 .manage-trust{display:flex;align-items:center;gap:8px;margin:16px 0;color:var(--muted);font-size:12px}
 .manage-trust input{accent-color:var(--accent)}
+.kind-badge{display:inline-flex;align-items:center;justify-content:center;margin-left:5px;padding:1px 5px;border:1px solid var(--border);border-radius:4px;color:var(--accent);font:700 9px/1.5 ui-monospace,Consolas,monospace;vertical-align:middle}
 #save-registered-script:disabled{opacity:.5;cursor:not-allowed}
 #manage-message{min-height:1.5em;margin:8px 0;color:var(--muted);font-size:12px}
 #manage-message.error{color:#ff9ca5}
@@ -216,20 +217,20 @@ body.compact .job{padding:10px}
     <div class="empty">Start an approved task to populate the workspace. Type <b>catalog</b> to see available jobs.</div>
   </section>
 
-  <div class="foot">Local-only desktop workspace · Jobs run through an allowlisted Python engine · No HTTP listener</div>
+  <div class="foot">Local-only desktop workspace · Jobs run through an allowlisted script engine · No HTTP listener</div>
   </section>
 
   <section id="manage-work-page" class="page-view manage-work-page" hidden>
     <div class="manage-work-head">
       <div>
         <h1>MANAGE WORK</h1>
-        <p class="subtle">Register trusted Python scripts in place. ACW saves their paths; it does not copy or modify them.</p>
+        <p class="subtle">Register trusted Python or Windows batch scripts in place. ACW saves their paths; it does not copy or modify them.</p>
       </div>
       <button id="execution-page-nav" type="button">Back to workspace</button>
     </div>
     <form id="register-script-form" class="manage-work-form">
       <h2>Add an available script</h2>
-      <p class="subtle">Scripts run with your Windows account permissions. Register only scripts you trust.</p>
+      <p class="subtle">Scripts run with your account permissions. Register only scripts you trust.</p>
       <div class="manage-field">
         <label for="registered-script-name">Command name</label>
         <input id="registered-script-name" required pattern="[a-z][a-z0-9\-]*" maxlength="80" autocomplete="off">
@@ -239,7 +240,11 @@ body.compact .job{padding:10px}
         <input id="registered-script-label" required maxlength="80" autocomplete="off">
       </div>
       <div class="manage-field">
-        <label for="registered-script-path">Python script</label>
+        <label for="registered-script-description">Description</label>
+        <input id="registered-script-description" maxlength="500" autocomplete="off">
+      </div>
+      <div class="manage-field">
+        <label for="registered-script-path">Script file</label>
         <div class="manage-path-row">
           <input id="registered-script-path" type="text" readonly required>
           <button id="browse-script" type="button">Choose file…</button>

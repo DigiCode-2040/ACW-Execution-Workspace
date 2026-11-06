@@ -1,11 +1,13 @@
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import acw.engine as engine_module
-from acw.engine import Engine
+from acw.engine import Engine, parse_acw_header
 
 
 class RegisteredScriptTests(unittest.TestCase):
@@ -44,6 +46,8 @@ class RegisteredScriptTests(unittest.TestCase):
             str(self.external_script),
             str(self.external_directory),
             'Custom Task',
+            'Run the registered task',
+            True,
         )
 
     def test_registration_persists_path_and_working_directory(self):
@@ -52,6 +56,7 @@ class RegisteredScriptTests(unittest.TestCase):
         restored = Engine()
         entry = next(item for item in restored.catalog() if item['name'] == 'custom-task')
         self.assertEqual(entry['label'], 'Custom Task')
+        self.assertEqual(entry['kind'], 'python')
         registered = restored.list_registered_scripts()[0]
         self.assertEqual(registered['path'], str(self.external_script.resolve()))
         self.assertEqual(registered['working_directory'], str(self.external_directory.resolve()))
@@ -62,11 +67,241 @@ class RegisteredScriptTests(unittest.TestCase):
         not_python.write_text('not a script', encoding='utf-8')
         with self.assertRaisesRegex(ValueError, 'Python'):
             self.engine.register_script(
-                'bad-script', str(not_python), str(self.external_directory), 'Bad Script'
+                'bad-script', str(not_python), str(self.external_directory), 'Bad Script',
+                'Bad script', True,
             )
         with self.assertRaisesRegex(ValueError, 'working directory'):
             self.engine.register_script(
-                'custom-task', str(self.external_script), str(self.root / 'missing'), 'Custom Task'
+                'custom-task', str(self.external_script), str(self.root / 'missing'), 'Custom Task',
+                'Custom task', True,
+            )
+
+    def test_registration_requires_explicit_trust_confirmation(self):
+        with self.assertRaisesRegex(ValueError, 'trust'):
+            self.engine.register_script(
+                'custom-task', str(self.external_script), str(self.external_directory),
+                'Custom Task', 'Run the task', False,
+            )
+
+    def test_batch_header_parser_supports_rem_and_double_colon_comments(self):
+        batch = self.external_directory / 'custom_task.cmd'
+        batch.write_text(
+            'REM ACW_COMMAND: custom-task\n'
+            ':: ACW_DESCRIPTION: Run the custom Windows task\n'
+            'REM ACW_LABEL: Custom Windows Task\n'
+            'REM ACW_OUTPUT_DIR: output\n'
+            'echo done\n',
+            encoding='utf-8',
+        )
+
+        metadata = parse_acw_header(batch)
+
+        self.assertEqual(metadata['command'], 'custom-task')
+        self.assertEqual(metadata['description'], 'Run the custom Windows task')
+        self.assertEqual(metadata['label'], 'Custom Windows Task')
+        self.assertEqual(metadata['output_dir'], ['output'])
+
+    def test_header_parser_rejects_missing_invalid_and_late_required_fields(self):
+        batch = self.external_directory / 'invalid.bat'
+        batch.write_text('echo first\nREM ACW_COMMAND: invalid-name\n', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'ACW_COMMAND and ACW_DESCRIPTION'):
+            parse_acw_header(batch)
+
+        batch.write_text(
+            'REM ACW_COMMAND: Invalid_Name\n'
+            'REM ACW_DESCRIPTION: Invalid command\n',
+            encoding='utf-8',
+        )
+        with self.assertRaisesRegex(ValueError, 'invalid ACW_COMMAND'):
+            parse_acw_header(batch)
+
+        batch.write_text(
+            '\n'.join(['echo setup'] * 20 + [
+                'REM ACW_COMMAND: too-late',
+                'REM ACW_DESCRIPTION: Not read',
+            ]),
+            encoding='utf-8',
+        )
+        with self.assertRaisesRegex(ValueError, 'first 20 lines'):
+            parse_acw_header(batch)
+
+    def test_batch_registration_requires_matching_header_and_persists_kind(self):
+        batch = self.external_directory / 'batch_task.bat'
+        batch.write_text(
+            'REM ACW_COMMAND: batch-task\n'
+            'REM ACW_DESCRIPTION: Run a trusted batch job\n'
+            'REM ACW_LABEL: Batch Task\n'
+            'REM ACW_OUTPUT_DIR: batch-output\n'
+            'echo done\n',
+            encoding='utf-8',
+        )
+        registered = self.engine.register_script(
+            'batch-task', str(batch), str(self.external_directory),
+            'Ignored label', 'Ignored description', True,
+        )
+
+        self.assertEqual(registered['kind'], 'batch')
+        self.assertEqual(registered['label'], 'Batch Task')
+        restored = Engine()
+        stored = next(item for item in restored.list_registered_scripts() if item['name'] == 'batch-task')
+        self.assertEqual(stored['kind'], 'batch')
+        self.assertEqual(stored['description'], 'Run a trusted batch job')
+        self.assertEqual(stored['output_dirs'], [str((self.root / 'batch-output').resolve())])
+
+    def test_batch_registration_rejects_missing_header_and_name_mismatch(self):
+        batch = self.external_directory / 'batch_task.bat'
+        batch.write_text('echo no header\n', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'ACW_COMMAND and ACW_DESCRIPTION'):
+            self.engine.register_script(
+                'batch-task', str(batch), str(self.external_directory),
+                'Batch Task', 'Batch description', True,
+            )
+        batch.write_text(
+            'REM ACW_COMMAND: other-name\n'
+            'REM ACW_DESCRIPTION: Batch description\n',
+            encoding='utf-8',
+        )
+        with self.assertRaisesRegex(ValueError, 'match ACW_COMMAND'):
+            self.engine.register_script(
+                'batch-task', str(batch), str(self.external_directory),
+                'Batch Task', 'Batch description', True,
+            )
+
+    def test_catalog_reload_refreshes_and_revalidates_registered_batch_header(self):
+        batch = self.external_directory / 'batch_task.bat'
+        batch.write_text(
+            'REM ACW_COMMAND: batch-task\n'
+            'REM ACW_DESCRIPTION: Original description\n'
+            'REM ACW_LABEL: Original label\n',
+            encoding='utf-8',
+        )
+        self.engine.register_script(
+            'batch-task', str(batch), str(self.external_directory),
+            'Batch Task', 'Original description', True,
+        )
+        batch.write_text(
+            'REM ACW_COMMAND: batch-task\n'
+            'REM ACW_DESCRIPTION: Updated description\n'
+            'REM ACW_LABEL: Updated label\n',
+            encoding='utf-8',
+        )
+
+        catalog = self.engine.reload_catalog()
+        entry = next(item for item in catalog if item['name'] == 'batch-task')
+        self.assertEqual(entry['description'], 'Updated description')
+        self.assertEqual(entry['label'], 'Updated label')
+
+        batch.write_text(
+            'REM ACW_COMMAND: renamed-task\n'
+            'REM ACW_DESCRIPTION: Changed command\n',
+            encoding='utf-8',
+        )
+        catalog = self.engine.reload_catalog()
+        self.assertNotIn('batch-task', {item['name'] for item in catalog})
+        registered = next(
+            item for item in self.engine.list_registered_scripts()
+            if item['name'] == 'batch-task'
+        )
+        self.assertFalse(registered['available'])
+        self.assertIn('no longer matches', registered['reason'])
+
+    def test_batch_runtime_arguments_are_rejected_before_launch(self):
+        batch = self.external_directory / 'batch_task.bat'
+        batch.write_text(
+            'REM ACW_COMMAND: batch-task\n'
+            'REM ACW_DESCRIPTION: Run a trusted batch job\n',
+            encoding='utf-8',
+        )
+        self.engine.register_script(
+            'batch-task', str(batch), str(self.external_directory),
+            'Batch Task', 'Run a trusted batch job', True,
+        )
+        with patch.object(self.engine, '_script_available', return_value=True), \
+                patch.object(self.engine, '_launch') as launch:
+            with self.assertRaisesRegex(ValueError, 'do not accept runtime arguments'):
+                self.engine.start('batch-task', ['input.txt'])
+        launch.assert_not_called()
+
+    def test_batch_launch_uses_quoted_path_without_user_arguments(self):
+        command = Engine._batch_launch_command(self.external_directory / 'a batch task.cmd')
+
+        self.assertIn(' /d /s /c ', command)
+        self.assertTrue(command.endswith(f'""{self.external_directory / "a batch task.cmd"}""'))
+        self.assertNotIn(' && ', command)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows batch execution requires cmd.exe')
+    def test_batch_run_captures_output_and_exit_code(self):
+        batch = self.external_directory / 'batch task.cmd'
+        batch.write_text(
+            '@echo off\n'
+            'REM ACW_COMMAND: batch-task\n'
+            'REM ACW_DESCRIPTION: Run a batch process test\n'
+            'echo batch-output\n'
+            'exit /b 7\n',
+            encoding='utf-8',
+        )
+        self.engine.register_script(
+            'batch-task', str(batch), str(self.external_directory),
+            'Batch Task', 'Run a batch process test', True,
+        )
+
+        started = self.engine.start('batch-task')
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            job = next(item for item in self.engine.snapshot() if item['id'] == started['id'])
+            if job['status'] in ('completed', 'failed'):
+                break
+            time.sleep(0.05)
+
+        self.assertEqual(job['status'], 'failed')
+        self.assertEqual(job['kind'], 'batch')
+        self.assertEqual(job['exit_code'], 7)
+        self.assertTrue(any('batch-output' in line for line in job['output']))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows batch cancellation requires cmd.exe')
+    def test_batch_job_can_be_cancelled(self):
+        batch = self.external_directory / 'batch_loop.cmd'
+        batch.write_text(
+            '@echo off\n'
+            'REM ACW_COMMAND: batch-loop\n'
+            'REM ACW_DESCRIPTION: Batch cancellation test\n'
+            ':loop\n'
+            'goto loop\n',
+            encoding='utf-8',
+        )
+        self.engine.register_script(
+            'batch-loop', str(batch), str(self.external_directory),
+            'Batch Loop', 'Batch cancellation test', True,
+        )
+        started = self.engine.start('batch-loop')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            job = next(item for item in self.engine.snapshot() if item['id'] == started['id'])
+            if job['status'] == 'running':
+                break
+            time.sleep(0.02)
+        self.assertEqual(job['status'], 'running')
+
+        self.engine.cancel(started['id'])
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            job = next(item for item in self.engine.snapshot() if item['id'] == started['id'])
+            if job['status'] == 'cancelled':
+                break
+            time.sleep(0.02)
+        self.assertEqual(job['status'], 'cancelled')
+
+    def test_batch_paths_with_cmd_metacharacters_are_rejected(self):
+        batch = self.external_directory / 'unsafe&task.bat'
+        batch.write_text(
+            'REM ACW_COMMAND: unsafe-task\n'
+            'REM ACW_DESCRIPTION: Unsafe path test\n',
+            encoding='utf-8',
+        )
+        with self.assertRaisesRegex(ValueError, 'metacharacters'):
+            self.engine.register_script(
+                'unsafe-task', str(batch), str(self.external_directory),
+                'Unsafe Task', 'Unsafe path test', True,
             )
 
     def test_missing_registered_script_remains_visible_but_not_runnable(self):
@@ -212,6 +447,9 @@ class RegisteredScriptTests(unittest.TestCase):
 
             def join(self, timeout=None):
                 pass
+
+            def is_alive(self):
+                return False
 
         class FakeProcess:
             stdout = []

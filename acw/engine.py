@@ -32,7 +32,16 @@ MAX_RUNS = 200
 MAX_HISTORY_PER_SCRIPT = 30
 METADATA_LINES = 20
 COMMAND_PATTERN = re.compile(r'^[a-z][a-z0-9-]*$')
-ARTIFACT_METADATA = re.compile(r'^\s*#\s*ACW_(COMMAND|DESCRIPTION|LABEL|OUTPUT_DIR):\s*(.*?)\s*$')
+PYTHON_HEADER_METADATA = re.compile(
+    r'^\s*#\s*ACW_(COMMAND|DESCRIPTION|LABEL|OUTPUT_DIR):\s*(.*?)\s*$',
+    re.IGNORECASE,
+)
+BATCH_HEADER_METADATA = re.compile(
+    r'^\s*(?:REM\b\s*|::\s*)ACW_(COMMAND|DESCRIPTION|LABEL|OUTPUT_DIR):\s*(.*?)\s*$',
+    re.IGNORECASE,
+)
+SINGLE_HEADER_KEYS = {'command', 'description', 'label'}
+UNSAFE_BATCH_PATH_CHARACTERS = set('%"!^&|<>()\r\n')
 OPENABLE_ARTIFACT_EXTENSIONS = {
     '.7z', '.bmp', '.csv', '.docx', '.gif', '.jpeg', '.jpg', '.json',
     '.log', '.md', '.pdf', '.png', '.pptx', '.rar', '.txt', '.webp',
@@ -42,6 +51,60 @@ OPENABLE_ARTIFACT_EXTENSIONS = {
 
 def stamp():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
+
+
+def parse_acw_header(path):
+    """Parse ACW metadata from a supported script's first metadata lines."""
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix not in ('.py', '.bat', '.cmd'):
+        raise ValueError('Choose a Python, .bat, or .cmd script.')
+    try:
+        with path.open(encoding='utf-8-sig', errors='replace') as source:
+            lines = [source.readline() for _ in range(METADATA_LINES)]
+    except OSError as exc:
+        raise ValueError(f'Unable to read script header: {exc}') from exc
+
+    metadata = {}
+    seen = set()
+    pattern = (
+        PYTHON_HEADER_METADATA
+        if suffix == '.py'
+        else BATCH_HEADER_METADATA
+    )
+    for line in lines:
+        match = pattern.match(line)
+        if not match:
+            continue
+        key, value = match.group(1).lower(), match.group(2).strip()
+        if key in SINGLE_HEADER_KEYS and key in seen:
+            raise ValueError(f'Duplicate ACW_{key.upper()} declaration.')
+        seen.add(key)
+        if key == 'output_dir':
+            metadata.setdefault(key, []).append(value)
+        else:
+            metadata[key] = value
+
+    if not metadata:
+        if suffix in ('.bat', '.cmd'):
+            raise ValueError(
+                f'{path.name} must define ACW_COMMAND and ACW_DESCRIPTION '
+                f'in its first {METADATA_LINES} lines.'
+            )
+        return {}
+    if not metadata.get('command') or not metadata.get('description'):
+        raise ValueError(
+            f'{path.name} must define ACW_COMMAND and ACW_DESCRIPTION '
+            f'in its first {METADATA_LINES} lines.'
+        )
+    if any(not output_dir for output_dir in metadata.get('output_dir', [])):
+        raise ValueError(f'{path.name} has an empty ACW_OUTPUT_DIR declaration.')
+    if not COMMAND_PATTERN.fullmatch(metadata['command']):
+        raise ValueError(
+            f'{path.name} has invalid ACW_COMMAND {metadata["command"]!r}; '
+            'use lowercase letters, numbers, and hyphens.'
+        )
+    return metadata
 
 
 class Engine:
@@ -57,6 +120,7 @@ class Engine:
         RUN_DIR.mkdir(exist_ok=True)
         SESSIONS_DIR.mkdir(exist_ok=True)
         self.custom_scripts = self._load_registered_scripts()
+        self._refresh_registered_metadata()
         self.registry = self._build_registry(self._discover_scripts())
         self._averages = {}  # script_name -> list of recent runtimes
         self._load_averages()
@@ -72,29 +136,10 @@ class Engine:
             resolved = path.resolve()
             if resolved.parent != script_dir:
                 continue
-            lines = path.read_text(encoding='utf-8').splitlines()[:METADATA_LINES]
-            metadata = {}
-            for line in lines:
-                match = ARTIFACT_METADATA.match(line)
-                if match:
-                    key, value = match.group(1).lower(), match.group(2)
-                    if key == 'output_dir':
-                        metadata.setdefault(key, []).append(value)
-                    else:
-                        metadata[key] = value
+            metadata = parse_acw_header(path)
             if not metadata:
                 continue
-            if not metadata.get('command') or not metadata.get('description'):
-                raise ValueError(
-                    f'{path.name} must define ACW_COMMAND and ACW_DESCRIPTION '
-                    f'in its first {METADATA_LINES} lines.'
-                )
             name = metadata['command']
-            if not COMMAND_PATTERN.fullmatch(name):
-                raise ValueError(
-                    f'{path.name} has invalid ACW_COMMAND {name!r}; '
-                    'use lowercase letters, numbers, and hyphens.'
-                )
             if name in registry:
                 raise ValueError(
                     f'Duplicate ACW_COMMAND {name!r} in {path.name} '
@@ -105,11 +150,13 @@ class Engine:
             if any(not output_dir for output_dir in output_dirs):
                 raise ValueError(f'{path.name} has an empty ACW_OUTPUT_DIR declaration.')
             registry[name] = {
+                'name': name,
                 'label': label,
                 'path': resolved,
                 'working_directory': ROOT.resolve(),
                 'description': metadata['description'],
                 'registered': False,
+                'kind': 'python',
                 'output_dirs': [
                     (ROOT / output_dir).resolve()
                     if not Path(output_dir).expanduser().is_absolute()
@@ -142,15 +189,32 @@ class Engine:
                 raise ValueError(f'Invalid registered script entry: {name!r}.')
             path = Path(item['path']).expanduser()
             working_directory = Path(item['working_directory']).expanduser()
-            if not path.is_absolute() or path.suffix.lower() != '.py' or not working_directory.is_absolute():
+            kind = item.get('kind', 'python')
+            if (
+                not path.is_absolute()
+                or path.suffix.lower() not in ('.py', '.bat', '.cmd')
+                or not working_directory.is_absolute()
+                or kind not in ('python', 'batch')
+                or (kind == 'python' and path.suffix.lower() != '.py')
+                or (kind == 'batch' and path.suffix.lower() not in ('.bat', '.cmd'))
+                or not isinstance(item.get('output_dirs', []), list)
+                or any(not isinstance(directory, str) for directory in item.get('output_dirs', []))
+            ):
                 raise ValueError(f'Invalid paths for registered script {name!r}.')
             scripts[name] = {
+                'name': name,
                 'label': item['label'],
                 'path': path,
                 'working_directory': working_directory,
                 'description': item.get('description') or str(path),
                 'registered': True,
-                'output_dirs': [],
+                'kind': kind,
+                'output_dirs': [
+                    (ROOT / output_dir).resolve()
+                    if not Path(output_dir).expanduser().is_absolute()
+                    else Path(output_dir).expanduser().resolve()
+                    for output_dir in item.get('output_dirs', [])
+                ],
             }
         return scripts
 
@@ -161,12 +225,41 @@ class Engine:
                 'path': str(item['path']),
                 'working_directory': str(item['working_directory']),
                 'description': item['description'],
+                'kind': item.get('kind', 'python'),
+                'output_dirs': [
+                    str(directory) for directory in item.get('output_dirs', [])
+                ],
             }
             for name, item in scripts.items()
         }
         temporary = REGISTERED_SCRIPTS_FILE.with_suffix('.json.tmp')
         temporary.write_text(json.dumps(data, indent=2), encoding='utf-8')
         temporary.replace(REGISTERED_SCRIPTS_FILE)
+
+    def _refresh_registered_metadata(self):
+        updated = dict(self.custom_scripts)
+        changed = False
+        for name, old_item in self.custom_scripts.items():
+            path = Path(old_item['path'])
+            if not path.is_file():
+                continue
+            try:
+                metadata = parse_acw_header(path)
+            except ValueError:
+                continue
+            if metadata and metadata.get('command') != name:
+                continue
+            item = dict(old_item)
+            if metadata:
+                item['label'] = metadata.get('label') or name.replace('-', ' ').title()
+                item['description'] = metadata['description']
+                item['output_dirs'] = self._output_directories(metadata.get('output_dir', []))
+            if item != old_item:
+                updated[name] = item
+                changed = True
+        if changed:
+            self._save_registered_scripts(updated)
+            self.custom_scripts = updated
 
     def _build_registry(self, discovered):
         registry = dict(discovered)
@@ -180,22 +273,68 @@ class Engine:
     def _script_available(script):
         path = Path(script['path']).expanduser()
         working_directory = Path(script['working_directory']).expanduser()
-        return (
-            path.suffix.lower() == '.py'
-            and path.is_file()
-            and working_directory.is_dir()
-        )
+        kind = script.get('kind', 'python')
+        expected_suffixes = ('.py',) if kind == 'python' else ('.bat', '.cmd')
+        if (
+            path.suffix.lower() not in expected_suffixes
+            or not path.is_file()
+            or not working_directory.is_dir()
+        ):
+            return False
+        if kind == 'batch' and os.name != 'nt':
+            return False
+        if kind == 'batch' and set(str(path.resolve())) & UNSAFE_BATCH_PATH_CHARACTERS:
+            return False
+        if script.get('registered'):
+            try:
+                metadata = parse_acw_header(path)
+            except ValueError:
+                return False
+            if kind == 'batch' or metadata:
+                return metadata.get('command') == script.get('name')
+        return True
+
+    @staticmethod
+    def _output_directories(values):
+        return [
+            (ROOT / output_dir).resolve()
+            if not Path(output_dir).expanduser().is_absolute()
+            else Path(output_dir).expanduser().resolve()
+            for output_dir in values
+        ]
+
+    @staticmethod
+    def _batch_launch_command(path):
+        path = str(Path(path).resolve())
+        if set(path) & UNSAFE_BATCH_PATH_CHARACTERS:
+            raise ValueError(
+                'Batch script paths containing cmd.exe metacharacters are not supported.'
+            )
+        executable = Engine._batch_cmd_executable()
+        return f'"{executable}" /d /s /c ""{path}""'
+
+    @staticmethod
+    def _batch_cmd_executable():
+        if os.name != 'nt':
+            raise ValueError('Windows batch scripts can only run on Windows.')
+        system_root = os.environ.get('SystemRoot')
+        if not system_root:
+            raise RuntimeError('SystemRoot is not set; cannot locate cmd.exe.')
+        executable = Path(system_root) / 'System32' / 'cmd.exe'
+        if not executable.is_file():
+            raise RuntimeError(f'Windows command interpreter not found: {executable}')
+        return str(executable)
 
     @staticmethod
     def _validate_script_path(path):
         if not isinstance(path, str) or '\0' in path:
-            raise ValueError('Choose a Python script file.')
+            raise ValueError('Choose a Python, .bat, or .cmd script file.')
         try:
             resolved = Path(path).expanduser().resolve(strict=True)
         except (OSError, RuntimeError) as exc:
             raise ValueError('The selected script does not exist or cannot be resolved.') from exc
-        if not resolved.is_file() or resolved.suffix.lower() != '.py':
-            raise ValueError('The selected file must be a Python (.py) script.')
+        if not resolved.is_file() or resolved.suffix.lower() not in ('.py', '.bat', '.cmd'):
+            raise ValueError('The selected file must be a Python, .bat, or .cmd script.')
         return resolved
 
     @staticmethod
@@ -217,14 +356,41 @@ class Engine:
             'name': name,
             'label': item['label'],
             'description': item['description'],
+            'kind': item.get('kind', 'python'),
             'path': str(item['path']),
             'working_directory': str(item['working_directory']),
+            'output_dirs': [str(path) for path in item.get('output_dirs', [])],
             'available': available,
         }
         if conflict:
             summary['reason'] = 'Command name conflicts with a script in the built-in catalog.'
         elif not available:
-            summary['reason'] = 'Script file or working directory is unavailable.'
+            if item.get('kind') == 'batch' and os.name != 'nt':
+                summary['reason'] = 'Batch scripts can only run on Windows.'
+            elif not Path(item['path']).is_file():
+                summary['reason'] = 'Script file is unavailable.'
+            elif not Path(item['working_directory']).is_dir():
+                summary['reason'] = 'Working directory is unavailable.'
+            elif (
+                item.get('kind') == 'batch'
+                and set(str(Path(item['path']).resolve())) & UNSAFE_BATCH_PATH_CHARACTERS
+            ):
+                summary['reason'] = (
+                    'Batch script paths containing cmd.exe metacharacters are not supported.'
+                )
+            elif item.get('registered'):
+                try:
+                    metadata = parse_acw_header(item['path'])
+                except ValueError as exc:
+                    summary['reason'] = str(exc)
+                else:
+                    summary['reason'] = (
+                        'ACW_COMMAND no longer matches the registered command.'
+                        if metadata.get('command') != name
+                        else 'Batch script is unavailable.'
+                    )
+            else:
+                summary['reason'] = 'Script file or working directory is unavailable.'
         return summary
 
     def list_registered_scripts(self):
@@ -234,12 +400,37 @@ class Engine:
                 for name, item in self.custom_scripts.items()
             ]
 
-    def register_script(self, name, path, working_directory, label=None):
+    def register_script(
+        self, name, path, working_directory, label=None, description=None, trusted=False
+    ):
+        if trusted is not True:
+            raise ValueError('Confirm that you trust this script before registering it.')
         if not isinstance(name, str) or not COMMAND_PATTERN.fullmatch(name):
             raise ValueError('Script command name must use lowercase letters, numbers, and hyphens, and start with a letter.')
-        if not isinstance(label, str) or not label.strip() or len(label.strip()) > 80:
-            raise ValueError('Enter a display name of 1 to 80 characters.')
         resolved = self._validate_script_path(path)
+        kind = 'python' if resolved.suffix.lower() == '.py' else 'batch'
+        if kind == 'batch':
+            unsafe = set(str(resolved)) & UNSAFE_BATCH_PATH_CHARACTERS
+            if unsafe:
+                raise ValueError(
+                    'Batch script paths containing cmd.exe metacharacters are not supported.'
+                )
+        metadata = parse_acw_header(resolved)
+        if kind == 'batch' or metadata:
+            if metadata.get('command') != name:
+                raise ValueError('The command name must match ACW_COMMAND in the script header.')
+        resolved_label = metadata.get('label') or label
+        resolved_description = metadata.get('description') or description
+        if (
+            not isinstance(resolved_label, str)
+            or not resolved_label.strip()
+            or len(resolved_label.strip()) > 80
+        ):
+            raise ValueError('Enter a display name of 1 to 80 characters.')
+        if not isinstance(resolved_description, str) or not resolved_description.strip():
+            resolved_description = f'Registered script · {resolved}'
+        if len(resolved_description.strip()) > 500:
+            raise ValueError('Script description must be 500 characters or fewer.')
         cwd = self._validate_working_directory(working_directory)
         discovered = self._discover_scripts()
         with self.lock:
@@ -248,12 +439,14 @@ class Engine:
             if any(Path(item['path']).resolve() == resolved for item in (*discovered.values(), *self.custom_scripts.values())):
                 raise ValueError('This script is already registered.')
             item = {
-                'label': label.strip(),
+                'name': name,
+                'label': resolved_label.strip(),
                 'path': resolved,
                 'working_directory': cwd,
-                'description': f'Registered script · {resolved}',
+                'description': resolved_description.strip(),
                 'registered': True,
-                'output_dirs': [],
+                'kind': kind,
+                'output_dirs': self._output_directories(metadata.get('output_dir', [])),
             }
             updated = {**self.custom_scripts, name: item}
             self._save_registered_scripts(updated)
@@ -268,12 +461,24 @@ class Engine:
                 raise ValueError('Unknown registered script.')
             discovered = self._discover_scripts()
             old = self.custom_scripts[name]
+            kind = 'python' if resolved.suffix.lower() == '.py' else 'batch'
+            if kind != old.get('kind', 'python'):
+                raise ValueError('Relink the script to a file of the same kind.')
+            metadata = parse_acw_header(resolved)
+            if (kind == 'batch' or metadata) and metadata.get('command') != name:
+                raise ValueError('The command name must match ACW_COMMAND in the script header.')
+            if kind == 'batch' and set(str(resolved)) & UNSAFE_BATCH_PATH_CHARACTERS:
+                raise ValueError('Batch script paths containing cmd.exe metacharacters are not supported.')
             if any(
                 other_name != name and Path(item['path']).resolve() == resolved
                 for other_name, item in {**discovered, **self.custom_scripts}.items()
             ):
                 raise ValueError('This script is already registered under another name.')
             item = dict(old)
+            if metadata:
+                item['label'] = metadata.get('label') or name.replace('-', ' ').title()
+                item['description'] = metadata['description']
+                item['output_dirs'] = self._output_directories(metadata.get('output_dir', []))
             if Path(old['working_directory']) == Path(old['path']).parent:
                 item['working_directory'] = resolved.parent
             item['path'] = resolved
@@ -300,7 +505,12 @@ class Engine:
 
     def _catalog_entries(self):
         return [
-            {'name': name, 'label': item['label'], 'description': item['description']}
+            {
+                'name': name,
+                'label': item['label'],
+                'description': item['description'],
+                'kind': item.get('kind', 'python'),
+            }
             for name, item in self.registry.items()
             if self._script_available(item)
         ]
@@ -308,6 +518,7 @@ class Engine:
     def reload_catalog(self):
         discovered = self._discover_scripts()
         with self.lock:
+            self._refresh_registered_metadata()
             self.registry = self._build_registry(discovered)
             return self._catalog_entries()
 
@@ -316,7 +527,7 @@ class Engine:
             if not isinstance(name, str) or name not in self.registry:
                 raise ValueError('Unknown script. Reload the catalog and select an approved script.')
             path = Path(self.registry[name]['path']).resolve(strict=True)
-        if not path.is_file() or path.suffix.lower() != '.py':
+        if not path.is_file() or path.suffix.lower() not in ('.py', '.bat', '.cmd'):
             raise ValueError('Selected script is missing or invalid.')
         if os.name == 'nt':
             subprocess.Popen(['notepad.exe', str(path)])
@@ -367,6 +578,11 @@ class Engine:
             script = self.registry[name]
             if not self._script_available(script):
                 raise ValueError('Selected script or working directory is unavailable.')
+            kind = script.get('kind', 'python')
+            if kind == 'batch' and arguments:
+                raise ValueError(
+                    'Batch scripts do not accept runtime arguments yet; run the batch file without arguments.'
+                )
 
             job_id = uuid.uuid4().hex[:10]
             avg = self._average_for(name)
@@ -374,6 +590,7 @@ class Engine:
                 id=job_id,
                 name=name,
                 label=script['label'],
+                kind=kind,
                 status='queued',
                 started=None,
                 ended=None,
@@ -449,6 +666,7 @@ class Engine:
             path = Path(script['path']).resolve()
             working_directory = Path(script.get('working_directory', ROOT)).resolve()
             arguments = self.job_arguments[job_id]
+            kind = script.get('kind', 'python')
             if not self._script_available(script):
                 job['status'] = 'failed'
                 job['ended'] = stamp()
@@ -463,8 +681,15 @@ class Engine:
             self._event(job, 'running', 'Process starting')
 
         try:
+            command = [sys.executable, '-u', str(path), *arguments]
+            executable = None
+            if kind == 'batch':
+                # cmd.exe uses non-CRT parsing, so pass only this fixed command line verbatim.
+                command = self._batch_launch_command(path)
+                executable = self._batch_cmd_executable()
             proc = subprocess.Popen(
-                [sys.executable, '-u', str(path), *arguments],
+                command,
+                executable=executable,
                 cwd=str(working_directory),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -480,6 +705,9 @@ class Engine:
             with self.lock:
                 self.processes[job_id] = proc
                 job['pid'] = proc.pid
+                cancel_requested = job['status'] == 'cancelling'
+            if cancel_requested:
+                self._terminate_process_tree(proc)
 
             start = time.monotonic()
             reader = threading.Thread(target=self._read_output, args=(job_id, proc), daemon=True)
@@ -547,6 +775,8 @@ class Engine:
                 time.sleep(0.35)
 
             reader.join(timeout=2)
+            if not reader.is_alive() and proc.stdout:
+                proc.stdout.close()
             with self.lock:
                 job = self.jobs.get(job_id)
                 if not job:
@@ -669,6 +899,7 @@ class Engine:
         rec = {
             'name': job['name'],
             'label': job.get('label'),
+            'kind': job.get('kind', 'python'),
             'runtime': job['runtime'],
             'peak_memory_mb': job.get('peak_memory_mb'),
             'exit_code': job.get('exit_code'),
@@ -823,6 +1054,7 @@ class Engine:
             'id': job['id'],
             'name': job['name'],
             'label': job.get('label'),
+            'kind': job.get('kind', 'python'),
             'status': job['status'] if job['status'] not in ('running', 'cancelling', 'queued') else 'interrupted',
             'started': job.get('started'),
             'ended': job.get('ended') or stamp(),
@@ -877,6 +1109,7 @@ class Engine:
                     id=jid,
                     name=j.get('name', 'unknown'),
                     label=j.get('label', j.get('name', 'unknown')),
+                    kind=j.get('kind', 'python'),
                     status=status,
                     started=j.get('started'),
                     ended=j.get('ended'),
@@ -979,6 +1212,7 @@ class Engine:
                     id=jid,
                     name=j.get('name', 'unknown'),
                     label=j.get('label', j.get('name', 'unknown')),
+                    kind=j.get('kind', 'python'),
                     status=status,
                     started=j.get('started'),
                     ended=j.get('ended'),
@@ -1108,22 +1342,30 @@ class Engine:
                 self._auto_save_session()
                 return {'ok': True}
             proc = self.processes.get(job_id)
-            if not proc or job['status'] != 'running':
+            if job['status'] != 'running':
                 raise ValueError('Job is not running')
             job['status'] = 'cancelling'
             self._event(job, 'warning', 'Cancellation requested')
-        try:
-            if psutil:
+        if proc:
+            self._terminate_process_tree(proc)
+        return {'ok': True}
+
+    @staticmethod
+    def _terminate_process_tree(proc):
+        if psutil:
+            try:
                 parent = psutil.Process(proc.pid)
                 for child in parent.children(recursive=True):
                     try:
                         child.terminate()
                     except psutil.Error:
                         pass
+            except psutil.Error:
+                pass
+        try:
             proc.terminate()
         except (ProcessLookupError, OSError):
             pass
-        return {'ok': True}
 
 
 def DateTime_parse(iso_str):
