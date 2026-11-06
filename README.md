@@ -1,53 +1,27 @@
 # ACW — Advanced Control Workspace
 
-A **local-only, command-first execution workspace** for launching approved Python scripts and observing asynchronous jobs. The frontend uses HTML5/CSS with JavaScript in a separate file, translucent panels, configurable cyberpunk themes, and two execution layouts. The backend runs Python scripts through a **pywebview JavaScript ↔ Python bridge**. **No FastAPI server, network listener, CDN, or cloud service is required.**
+ACW is a local-only desktop workspace for running trusted Python scripts, composing small automation workflows, and keeping a durable record of each execution. It is designed to stay on the user’s machine: the app uses a pywebview JS/Python bridge, an allowlisted script catalog, and local filesystem persistence. No server, no remote execution, and no shell-based command evaluation are required.
 
-> **Status:** Early working prototype / v4 foundation. Designed for local desktop use. Not yet a hardened production job scheduler.
+This project is intended for local automation and personal workflow orchestration: organizing files, validating outputs, quality checks, data prep, and scripted tasks you explicitly trust.
 
-## Archived screenshots
+## What ACW includes
 
-These captures show an earlier UI and do not reflect the current layout and spacing.
-
-### Cyan collapsed dashboard
-![ACW execution workspace in the cyan collapsed dashboard](screenshots/acw-collapsed-cyan.png)
-
-### Amber canvas layout
-![ACW execution workspace in the amber Canvas layout](screenshots/acw-canvas-amber.png)
-
-## Features
-
-- Persistent toolbar with monitor checkboxes, layout selector, live date/time, and user preferences
-- Expandable terminal (`Enter` executes; `Shift+Enter` inserts a newline)
-- Configurable recent action history (1–20 lines)
-- Job status filters and search across job details, events, and artifacts
-- At-a-glance status cues across layouts: pulsing running jobs, green completed checks, neutral gray failures, and muted queued/cancelling states
-- Real asynchronous Python subprocess execution, with a controlled script catalog
-- Runtime catalog reload and argument passing to discovered and registered scripts
-- Script selector beside Run Selected, controls to reload scripts or open the selected script for editing, plus Exit App in Preferences
-- Task → Working Parts → Final Results details, with in-progress telemetry separated from finished results and artifacts
-- Manage Work page for registering trusted scripts in place and setting their working directories
-- Read-only Log Audit page for current-launch jobs and explicit searches of stored run details
-- Collapsed dashboard with compact live job totals, progress rows, expandable job details, and a recent-events sidebar
-- ACW brand mark with the full Advanced Control Workspace name
-- Collapsed dashboard and spatial Canvas layout modes
-- Canvas job nodes with live progress rings, expandable details, draggable/persisted positions, pan, zoom, and auto-arrange
-- Four themes (Cyan Cyberpunk default, Quantum Violet, Matrix Green, Industrial Amber)
-- Glass opacity, edge glow, compact-density preferences (saved locally in the embedded webview)
-- Job status, elapsed time, CPU and task memory via `psutil`, stdout, stage events, progress, and optional quality
-- Progress-based **ETA** and historical average duration per script, shown on job cards
-- Per-stage timing when scripts emit structured stage events
-- Configurable concurrency limit (default 4) with a FIFO queue for overflow jobs
-- Workspace session auto-save on exit and restore on next launch; named session save/load/clear
-- Lightweight run history index (`runs/history.jsonl`) with `history` and `compare` commands
-- Job cancellation (including queued jobs), JSON execution snapshots in `runs/`
-- Safe artifact Open/Reveal actions for reported paths under the project or declared output folders
-- Up/Down terminal command history and labeled, keyboard-accessible toolbar menus
+- Approved script catalog with metadata discovery from Python headers
+- Typed argument schemas for safer runtime validation and UI form generation
+- Terminal argument validation and autocomplete for schematized scripts
+- Local workflow DAG orchestration with sequential, parallel, conditional, and fan-out/fan-in steps
+- Parent/child job tracking for multi-step workflows
+- Run provenance: resolved args, script hashes, versions, input hashes, artifact hashes, environment snapshot, and event timeline
+- History, comparison, and visual insights for runtime and quality trends
+- Canvas-style job graph with workflow edges and stage timing/Gantt-style views
+- Persistent sessions and run snapshots under the project `runs/` and `sessions/` directories
+- Safe artifact reporting and Open/Reveal actions restricted to allowed project or configured output directories
 
 ## Requirements
 
 - Python 3.10+
-- Desktop OS with a supported pywebview renderer (Windows, macOS, or Linux)
-- OS-specific GUI/webview dependencies may be needed on Linux; consult [pywebview installation documentation](https://pywebview.flowrl.com/guide/installation.html)
+- Desktop OS with a supported pywebview renderer (Windows, macOS, Linux)
+- Local dependencies from `requirements.txt`
 
 ## Run locally
 
@@ -55,27 +29,41 @@ These captures show an earlier UI and do not reflect the current layout and spac
 python -m venv .venv
 ```
 
-Activate the environment:
+Activate it:
 
 - Windows PowerShell: `.venv\Scripts\Activate.ps1`
 - macOS/Linux: `source .venv/bin/activate`
 
-Install dependencies and launch:
+Then:
 
 ```bash
 python -m pip install -r requirements.txt
 python main.py
 ```
 
-This opens a desktop window. **Opening `ui/index.html` directly in Chrome or Edge will not connect to Python**, because the pywebview bridge is only injected into its own window.
+This opens the desktop window. Opening `ui/index.html` directly in a browser does not establish the pywebview bridge and will not connect to the local Python runtime.
 
-## Console commands
+## Core workflow
+
+The app is driven by an allowlisted catalog of trusted scripts:
+
+- scripts are discovered from the `scripts/` directory and/or registered via the UI
+- each script may declare metadata, validation schema, and output directories
+- jobs are queued and run under a configurable concurrency limit
+- jobs can be launched individually or as part of a workflow
+- all runs are recorded locally under `runs/`
+
+## Console and UI commands
+
+Common terminal actions include:
 
 ```text
 help
 catalog
 catalog reload
-run <command> [arguments...]
+run <script> [arguments...]
+workflow <name>
+run-workflow <name>
 list
 layout collapsed
 layout canvas
@@ -91,122 +79,174 @@ concurrent
 concurrent <N>
 ```
 
-Canvas is an optional layout. Its nodes can be dragged with a pointer or focused and moved with the arrow keys. Select a node's title/progress control to expand or collapse its details. Use the Canvas controls to zoom, reset the view, or auto-arrange all nodes; Ctrl+mouse wheel zooms and dragging the empty surface pans. Node positions and zoom are saved in the webview's local preferences. Canvas currently shows jobs independently; connectors and job relationships are not modeled.
+The UI also exposes:
 
-Collapsed is the default dashboard layout, showing compact running, completed, and failed totals beside the script selector, with recent timestamped job events in a side panel. Select a total to filter the job list; select a row's details control to expand its panels. The `layout connected` command is an alias for `layout collapsed`.
+- Run Selected and workflow launch controls
+- generated form inputs for schematized scripts
+- file/folder pickers for file and directory arguments
+- Canvas view for jobs and workflow nodes/edges
+- run insights panel for trends, diffing, and bottleneck detection
 
-Scripts in `scripts/` are discovered when the app starts. Use **Manage Work** in the top bar to register an existing `.py` file without copying or modifying it. ACW saves its absolute path and working directory in `runs/registered_scripts.json`; the default working directory is the script's parent folder. A missing or moved script appears as unavailable until relinked. The reload icon beside the selector or `catalog reload` rescans `scripts/` and refreshes the catalog. Use the adjacent edit icon to open the selected script in a text editor. For example, `run organize --target "C:\Users\you\Downloads Archive" --dry-run` passes the remaining tokens as arguments to the organizer script. Single- or double-quoted values preserve spaces. The Run Selected button launches the selected script without arguments.
+## Script discovery and metadata
 
-Arguments are passed as a list directly to the approved Python script; ACW does not invoke a shell. Each script decides which arguments it accepts. For example, the organizer's default target is `~/Downloads`; it accepts `--target <folder>` and `--dry-run`.
+Scripts can declare metadata in their first ~20 lines, for example:
 
-Use **Log Audit** in the top bar to inspect jobs started since the current app launch, including captured output, events, errors, and reported artifact paths. Restored jobs from earlier launches are excluded from this default view. Select **Search stored runs** and enter a search term to find matches in existing per-job snapshots, saved sessions, and the successful-run history index. Audit is read-only and does not scan directories or create a complete history; details for older failed or interrupted runs may not have been saved. Each job card's **Audit** action opens the matching current-session record or searches stored runs by that job ID.
+```python
+# ACW_COMMAND: organize
+# ACW_LABEL: Organize Downloads
+# ACW_DESCRIPTION: Sort files in ~/Downloads by type
+# ACW_OUTPUT_DIR: ./output
+```
 
-`run demo` and `run quality` start illustrative local example workflows. The concurrency limit defaults to 4 and is configurable (`concurrent <N>` or the Preferences slider). When the limit is reached, additional jobs enter a FIFO queue and start automatically when a slot opens. The terminal accepts up to 128 arguments with a combined length of 30,000 characters; each script is responsible for parsing and validating its own arguments. Job runtime, process CPU, and process memory readings are real measurements when `psutil` is available. CPU sampling is approximate. "System memory" is not currently collected and is labeled accordingly in the UI.
+Supported metadata includes:
 
-### Sessions and history
+- `ACW_COMMAND`: unique command name used in the catalog and CLI
+- `ACW_DESCRIPTION`: short description shown to users
+- `ACW_LABEL`: friendly display name in the UI
+- `ACW_OUTPUT_DIR`: declared output directory or project-relative path allowed for artifact actions
 
-- On exit (and after job completions), the current job list is written to `runs/last_session.json` and restored on the next launch. Jobs that were running or queued are marked `interrupted`.
-- Named sessions can be saved under `sessions/` via `session save [name]` or the Preferences button. Load with `session load <name>` (refuses while jobs are active). List with `session list`. Clear the workspace with `session clear`.
-- Successful runs append a compact record to `runs/history.jsonl` (script name, duration, peak memory, exit code, quality, timestamp, stage timings). Use `history [script]` and `compare <script>` to inspect recent runs and averages.
-- Job cards show a progress-based **ETA** when progress &gt; 0, and a historical average duration when prior successful runs exist for that script.
+Scripts with valid metadata are discovered automatically. Catalog reload refreshes the registry without restarting the app.
+
+## Input schemas
+
+ACW supports a formal input schema for commands. This can be declared with a JSON object in the source header or in a companion schema file; the exact format is intentionally lightweight and local. The schema can describe:
+
+- parameter name and display label
+- type: `string`, `path`, `file`, `bool`, `int`, `enum`
+- required vs optional
+- default values
+- validation rules like min/max, pattern, and enum choices
+- UI hints such as file picker, directory picker, multiline, or secret input
+- human-readable descriptions
+
+Schema validation occurs before the subprocess is launched. This keeps the catalog safer, makes generated forms easier to use, and helps terminal runs validate arguments consistently.
+
+Example header metadata for a schematized script:
+
+```python
+# ACW_COMMAND: organize
+# ACW_DESCRIPTION: Organize files in a target directory
+# ACW_INPUTS: {
+#   "type": "object",
+#   "properties": {
+#     "target": {"type": "path", "label": "Target folder", "description": "Directory to scan", "hint": "directory", "required": true},
+#     "dry_run": {"type": "bool", "default": true, "description": "List what would change without moving files"}
+#   },
+#   "required": ["target"]
+# }
+```
+
+Scripts without schemas can still be run as free-form commands, but schematized scripts gain validation, form generation, better catalog metadata, and safer reuse.
+
+## Workflow orchestration
+
+Workflows are local DAG definitions stored as JSON or YAML under `workflows/` and reference approved catalog commands by name.
+
+A workflow can include:
+
+- sequential steps
+- parallel execution with respect to `max_concurrent`
+- conditional branches and recovery nodes
+- fan-out/fan-in patterns
+- artifact and output passing from one step to another
+- parent job + child job records for traceability
+
+Example workflow structure:
+
+```json
+{
+  "name": "demo-quality",
+  "steps": [
+    {"name": "scan", "command": "organize", "params": {"target": "./downloads", "dry_run": true}},
+    {"name": "quality", "command": "quality_check", "depends_on": ["scan"]}
+  ]
+}
+```
+
+The workflow runner creates a parent job linked to child jobs, records dependency state, and preserves partial workflow metadata if interrupted.
+
+## Provenance and run analytics
+
+Every run capture is persisted locally under `runs/`.
+
+Key provenance details include:
+
+- exact script hash and version
+- resolved argument values after schema validation
+- environment snapshot (Python version, platform, key package versions where declared)
+- input file hashes for provided paths
+- artifact hashes and output references
+- structured event timeline and stage timings
+- CPU/memory sampling over time when available
+
+The app also provides run-insights views for:
+
+- runtime and quality trends
+- per-stage timing and bottleneck detection
+- run-to-run diffing
+- exportable provenance JSON reports
+- visual comparison heatmaps and stage timing views
+
+## Sessions and history
+
+ACW records execution state locally so it can resume and inspect previous work:
+
+- `runs/<job-id>.json`: per-run snapshot
+- `runs/history.jsonl`: compact append-only historical index
+- `runs/last_session.json`: auto-saved current state
+- `sessions/`: named saved workspace states
+
+The app tracks sessions, restores interrupted jobs, and supports history inspection and run comparisons by script name.
+
+## Security model
+
+ACW is intentionally local and allowlisted:
+
+- only approved scripts may be run
+- subprocesses use a direct Python spawn with no shell expansion
+- terminal parsing is local and argument validation happens before launch
+- artifact access is restricted to the project root and configured output directories
+- secrets are masked/redacted in persisted arguments, event history, and workflow snapshots
+
+This is a desktop automation tool, not a general-purpose remote agent platform. Only add scripts you trust.
 
 ## Project structure
 
 ```text
-acw-local/
-├── main.py                  # Desktop entrypoint
-├── requirements.txt
-├── README.md
-├── LICENSE
-├── .gitignore
+ACW-Execution-Workspace/
 ├── acw/
 │   ├── __init__.py
-│   ├── api.py                # Exposed bridge methods
-│   └── engine.py             # Job registry, subprocesses, telemetry, sessions, history
+│   ├── api.py
+│   └── engine.py
 ├── ui/
-│   ├── index.html            # HTML and CSS frontend
-│   └── app.js                # UI behavior and pywebview bridge calls
+│   ├── index.html
+│   └── app.js
 ├── scripts/
 │   ├── demo_pipeline.py
 │   ├── quality_check.py
 │   └── organize_downloads.py
-├── runs/                     # Created at startup
-│   ├── <job-id>.json         # Per-job snapshots
-│   ├── last_session.json     # Auto-restored workspace
-│   └── history.jsonl         # Append-only run index
-├── sessions/                 # Named workspace snapshots (created on first save)
-└── screenshots/              # UI captures referenced above
+├── workflows/
+│   └── demo-quality.json
+├── tests/
+│   └── test_engine.py
+├── main.py
+├── requirements.txt
+├── README.md
+├── LICENSE
+├── runs/
+│   ├── history.jsonl
+│   ├── last_session.json
+│   └── <job-id>.json
+├── sessions/
+└── screenshots/
 ```
 
-## Adding scripts
+## Limitations
 
-Place a trusted `.py` script in `scripts/` and add these comments near the top (within the first 20 lines):
-
-```python
-# ACW_COMMAND: my-command
-# ACW_DESCRIPTION: Short explanation shown in the catalog
-# ACW_LABEL: Optional friendly name shown in the UI
-# ACW_OUTPUT_DIR: Optional external output folder (project-relative or absolute)
-```
-
-`ACW_COMMAND` and `ACW_DESCRIPTION` are required for automatic discovery; `ACW_LABEL` is optional and defaults to a title-cased command. `ACW_OUTPUT_DIR` may be repeated to declare output folders eligible for artifact actions. Commands use lowercase letters, numbers, and hyphens, and must be unique. Run `catalog reload` to discover additions or metadata changes without restarting the app, then run one using `run my-command [arguments...]` or select it in the UI. For arguments containing spaces, use single or double quotes, for example `run organize --target "C:\My Downloads"`. Quotes are removed by the terminal parser; no shell expansion or shell execution occurs. Scripts without metadata can be registered through Manage Work.
-
-The process runner uses `shell=False` and only launches scripts in the approved catalog. Only add scripts you trust: they execute with your user account's privileges. Registered scripts run from their saved working directory. Registering a script does not add its folder to the artifact Open/Reveal allowlist.
-
-### Optional structured progress events
-
-Scripts can print a JSON event on its own line to report stage/progress/quality:
-
-```python
-import json
-print('ACW_EVENT:' + json.dumps({
-    'stage': 'Validation', 'progress': 70, 'quality': 98
-}), flush=True)
-```
-
-Any other stdout line is treated as ordinary process output. The engine retains up to 250 output lines and 250 events per job in memory. When a launched process exits, its job snapshot is written to `runs/<job-id>.json` (ignored by Git). Successful completions also append a compact record to `runs/history.jsonl` for averages and comparison.
-
-Scripts may emit progress updates while they run; when a script exits successfully, the engine marks its stage as `Complete` and progress as 100%. Changing the `stage` value records the duration of the previous stage for display on the job card.
-
-To expose an artifact path for safe Open/Reveal actions, scripts can emit it in a structured event:
-
-```python
-print('ACW_EVENT:' + json.dumps({
-    'artifact': 'reports/result.pdf'
-}), flush=True)
-```
-
-Relative artifact paths are resolved from the project root. For an output directory outside the project, declare one in the script header with `# ACW_OUTPUT_DIR: D:/path/to/output` (or a project-relative path). Artifact actions are available only for paths reported by that job and inside the project or its declared output directories. Open is limited to common document, image, and archive formats; other files can still be revealed in the file manager.
-
-## Keyboard and accessibility
-
-- **Enter** runs the terminal command; **Shift+Enter** inserts a new line.
-- **Up/Down** navigates command history when the caret is on the first/last line.
-- In Canvas layout, drag a node or focus its header and use the arrow keys to reposition it.
-- Floating toolbar menus announce their expanded state and return focus to the trigger when closed with **Escape**.
-
-## Architecture and limitations
-
-- **No listening service:** Python and the HTML frontend communicate through pywebview's local JavaScript API bridge.
-- **Concurrent execution:** Jobs run as subprocesses in background threads, so the UI remains responsive. A configurable concurrency limit (default 4) is enforced; overflow jobs wait in a FIFO queue.
-- **Local persistence:** Preferences and selected script use webview localStorage. Registered script paths and working directories are saved in `runs/registered_scripts.json`. The job list is auto-saved to `runs/last_session.json` and restored on the next launch. Named sessions live under `sessions/`. Successful run metrics are appended to `runs/history.jsonl`.
-- **Security boundary:** This is a local desktop app, not a sandbox. Scripts can access resources available to the current OS user. Do not add untrusted scripts to the catalog.
-- **Cancellation:** Attempts to terminate the job and child processes; queued jobs can be removed without starting. Some subprocess trees may require additional platform-specific cleanup.
-- **Telemetry:** Best-effort CPU/memory sampling and progress-based ETA, not a full tracing or profiling system. Stage timing is derived from structured events. Resource graphs, input versioning, file verification, and multi-step workflow DAGs remain future work.
-- **Platform testing:** Behavior can vary across desktop webview engines; validate on your target OS before relying on it for critical jobs.
-
-## Roadmap
-
-- [ ] Configurable script definitions and argument schemas
-- [x] Job filtering and search
-- [x] Stage-level timing and historical comparison (`history` / `compare`)
-- [x] Safe artifact Open/Reveal actions for reported artifacts
-- [x] Job list persistence across launches and named workspace sessions
-- [x] Configurable concurrency with queue
-- [ ] More robust process-tree cancellation and timeouts
-- [ ] Resource graphs and richer comparison views
-- [ ] Workflow dependencies and agent/tool-call telemetry
-- [ ] Automated tests and desktop packaging
+- This is a local desktop app, not a distributed scheduler or cloud system.
+- Workflow execution is still intentionally local and bounded by the machine on which ACW is running.
+- Resource and provenance telemetry are best-effort and useful for local optimization, but they are not a substitute for full production observability.
+- The safest operating model is to keep the catalog tightly controlled and review any new script before approving it.
 
 ## License
 
