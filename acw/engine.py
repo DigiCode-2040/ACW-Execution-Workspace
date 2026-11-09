@@ -611,6 +611,7 @@ class Engine:
                 eta_seconds=None,
                 historical_avg_seconds=avg,
                 arguments=list(arguments),
+                output_dirs=[str(directory) for directory in script.get('output_dirs', [])],
             )
             self.jobs[job_id] = job
             self.audit_session_job_ids.add(job_id)
@@ -677,7 +678,9 @@ class Engine:
         except (AttributeError, TypeError, ValueError) as exc:
             self._event(job, 'warning', f'Unable to record timing for stage {stage}: {exc}')
             return
-        job['stage_timings'][stage] = round(duration, 2)
+        job['stage_timings'][stage] = round(
+            job['stage_timings'].get(stage, 0) + max(0, duration), 2,
+        )
 
     def _run(self, job_id):
         with self.lock:
@@ -841,6 +844,7 @@ class Engine:
                     job['status'] = 'failed'
                     job['ended'] = stamp()
                     self._event(job, 'error', str(exc))
+                    self._save(job)
                     self._auto_save_session()
                 self._drain_queue()
         finally:
@@ -1095,6 +1099,7 @@ class Engine:
             'stage_timings': job.get('stage_timings') or {},
             'historical_avg_seconds': job.get('historical_avg_seconds'),
             'arguments': job.get('arguments') or [],
+            'output_dirs': job.get('output_dirs') or [],
         }
 
     def _auto_save_session(self):
@@ -1110,53 +1115,92 @@ class Engine:
         except OSError:
             pass
 
+    def _parse_session(self, data):
+        """Validate and build restored jobs without changing the current workspace."""
+        if not isinstance(data, dict):
+            raise ValueError('Session must contain a JSON object.')
+        records = data.get('jobs', [])
+        if not isinstance(records, list):
+            raise ValueError('Session jobs must be a list.')
+        jobs = {}
+        for j in records:
+            if not isinstance(j, dict) or not isinstance(j.get('id'), str) or not j['id']:
+                raise ValueError('Each session job must have a nonempty string ID.')
+            jid = j['id']
+            if jid in jobs:
+                raise ValueError(f'Duplicate session job ID: {jid}.')
+            for key in ('name', 'status', 'kind'):
+                if key in j and not isinstance(j[key], str):
+                    raise ValueError(f'Session job {key} must be a string.')
+            for key in ('label', 'stage', 'started', 'ended'):
+                if j.get(key) is not None and not isinstance(j[key], str):
+                    raise ValueError(f'Session job {key} must be a string or null.')
+            for key in ('output', 'artifacts', 'arguments', 'output_dirs'):
+                value = j.get(key, [])
+                if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                    raise ValueError(f'Session job {key} must be a list of strings.')
+            events = j.get('events', [])
+            if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
+                raise ValueError('Session job events must be a list of objects.')
+            timings = j.get('stage_timings', {})
+            if not isinstance(timings, dict) or any(
+                not isinstance(value, (int, float)) for value in timings.values()
+            ):
+                raise ValueError('Session job stage_timings must contain numeric durations.')
+            for key in ('runtime', 'cpu', 'memory_mb', 'peak_memory_mb', 'progress',
+                        'quality', 'exit_code', 'historical_avg_seconds'):
+                if j.get(key) is not None and not isinstance(j[key], (int, float)):
+                    raise ValueError(f'Session job {key} must be numeric or null.')
+            default_roots = [str(directory) for directory in
+                             self.registry.get(j.get('name'), {}).get('output_dirs', [])]
+            if any(not Path(directory).is_absolute() for directory in j.get('output_dirs', [])):
+                raise ValueError('Session job output directories must be absolute paths.')
+            status = j.get('status', 'interrupted')
+            if status in ('running', 'cancelling', 'queued'):
+                status = 'interrupted'
+            job = dict(
+                id=jid,
+                name=j.get('name', 'unknown'),
+                label=j.get('label', j.get('name', 'unknown')),
+                kind=j.get('kind', 'python'),
+                status=status,
+                started=j.get('started'),
+                ended=j.get('ended'),
+                runtime=j.get('runtime', 0),
+                cpu=j.get('cpu', 0),
+                memory_mb=j.get('memory_mb', 0),
+                peak_memory_mb=j.get('peak_memory_mb', 0),
+                exit_code=j.get('exit_code'),
+                stage=j.get('stage', '—'),
+                progress=j.get('progress', 0),
+                quality=j.get('quality'),
+                output=j.get('output') or [],
+                events=j.get('events') or [],
+                artifacts=j.get('artifacts') or [],
+                pid=None,
+                stage_started=None,
+                stage_timings=j.get('stage_timings') or {},
+                eta_seconds=None,
+                historical_avg_seconds=j.get('historical_avg_seconds'),
+                arguments=j.get('arguments') or [],
+                output_dirs=list(j.get('output_dirs', default_roots)),
+            )
+            jobs[jid] = job
+        return jobs
+
     def _restore_last_session(self):
-        """Load last session on startup (finished/interrupted jobs only)."""
+        """Load a valid session on startup, ignoring malformed saved state."""
         if not SESSION_FILE.exists():
             return
         try:
             data = json.loads(SESSION_FILE.read_text(encoding='utf-8'))
-            jobs = data.get('jobs') or []
-            max_c = data.get('max_concurrent')
-            if isinstance(max_c, int) and 1 <= max_c <= 32:
-                self.max_concurrent = max_c
-            for j in jobs:
-                if not isinstance(j, dict) or not j.get('id'):
-                    continue
-                jid = j['id']
-                # Never restore as running/queued
-                status = j.get('status', 'interrupted')
-                if status in ('running', 'cancelling', 'queued'):
-                    status = 'interrupted'
-                job = dict(
-                    id=jid,
-                    name=j.get('name', 'unknown'),
-                    label=j.get('label', j.get('name', 'unknown')),
-                    kind=j.get('kind', 'python'),
-                    status=status,
-                    started=j.get('started'),
-                    ended=j.get('ended'),
-                    runtime=j.get('runtime', 0),
-                    cpu=j.get('cpu', 0),
-                    memory_mb=j.get('memory_mb', 0),
-                    peak_memory_mb=j.get('peak_memory_mb', 0),
-                    exit_code=j.get('exit_code'),
-                    stage=j.get('stage', '—'),
-                    progress=j.get('progress', 0),
-                    quality=j.get('quality'),
-                    output=j.get('output') or [],
-                    events=j.get('events') or [],
-                    artifacts=j.get('artifacts') or [],
-                    pid=None,
-                    stage_started=None,
-                    stage_timings=j.get('stage_timings') or {},
-                    eta_seconds=None,
-                    historical_avg_seconds=j.get('historical_avg_seconds'),
-                    arguments=j.get('arguments') or [],
-                )
-                self.jobs[jid] = job
-        except (OSError, json.JSONDecodeError, TypeError):
-            pass
+            jobs = self._parse_session(data)
+        except (OSError, ValueError, TypeError):
+            return
+        self.jobs.update(jobs)
+        max_c = data.get('max_concurrent')
+        if type(max_c) is int and 1 <= max_c <= 32:
+            self.max_concurrent = max_c
 
     def save_session(self, name=None):
         """Save current workspace to a named session file (or auto name)."""
@@ -1182,13 +1226,14 @@ class Engine:
         for path in sorted(SESSIONS_DIR.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 data = json.loads(path.read_text(encoding='utf-8'))
+                self._parse_session(data)
                 sessions.append({
                     'name': data.get('name') or path.stem,
                     'saved_at': data.get('saved_at'),
                     'jobs': len(data.get('jobs') or []),
                     'file': path.name,
                 })
-            except (OSError, json.JSONDecodeError):
+            except (OSError, ValueError, TypeError):
                 continue
         return sessions
 
@@ -1203,16 +1248,18 @@ class Engine:
             for path in SESSIONS_DIR.glob('*.json'):
                 try:
                     data = json.loads(path.read_text(encoding='utf-8'))
+                    self._parse_session(data)
                     if data.get('name') == name_or_file:
                         candidate = path
                         break
-                except (OSError, json.JSONDecodeError):
+                except (OSError, ValueError, TypeError):
                     continue
         if not candidate.exists():
             raise ValueError(f'Session not found: {name_or_file}')
 
         data = json.loads(candidate.read_text(encoding='utf-8'))
         with self.lock:
+            jobs = self._parse_session(data)
             # Refuse to load while jobs are active
             if any(j['status'] in ('running', 'cancelling', 'queued') for j in self.jobs.values()):
                 raise ValueError('Cannot load session while jobs are active. Stop or wait for them first.')
@@ -1222,41 +1269,9 @@ class Engine:
             self.job_arguments.clear()
             self.queue.clear()
             max_c = data.get('max_concurrent')
-            if isinstance(max_c, int) and 1 <= max_c <= 32:
+            if type(max_c) is int and 1 <= max_c <= 32:
                 self.max_concurrent = max_c
-            for j in data.get('jobs') or []:
-                if not isinstance(j, dict) or not j.get('id'):
-                    continue
-                status = j.get('status', 'interrupted')
-                if status in ('running', 'cancelling', 'queued'):
-                    status = 'interrupted'
-                jid = j['id']
-                self.jobs[jid] = dict(
-                    id=jid,
-                    name=j.get('name', 'unknown'),
-                    label=j.get('label', j.get('name', 'unknown')),
-                    kind=j.get('kind', 'python'),
-                    status=status,
-                    started=j.get('started'),
-                    ended=j.get('ended'),
-                    runtime=j.get('runtime', 0),
-                    cpu=j.get('cpu', 0),
-                    memory_mb=j.get('memory_mb', 0),
-                    peak_memory_mb=j.get('peak_memory_mb', 0),
-                    exit_code=j.get('exit_code'),
-                    stage=j.get('stage', '—'),
-                    progress=j.get('progress', 0),
-                    quality=j.get('quality'),
-                    output=j.get('output') or [],
-                    events=j.get('events') or [],
-                    artifacts=j.get('artifacts') or [],
-                    pid=None,
-                    stage_started=None,
-                    stage_timings=j.get('stage_timings') or {},
-                    eta_seconds=None,
-                    historical_avg_seconds=j.get('historical_avg_seconds'),
-                    arguments=j.get('arguments') or [],
-                )
+            self.jobs.update(jobs)
             self._auto_save_session()
         return {'ok': True, 'jobs': len(self.jobs), 'name': data.get('name')}
 
@@ -1301,7 +1316,8 @@ class Engine:
                 raise ValueError('Unknown job')
             if not isinstance(artifact, str) or artifact not in job['artifacts']:
                 raise ValueError('Artifact was not reported by this job')
-            roots = [ROOT.resolve(), *self.job_scripts.get(job_id, {}).get('output_dirs', [])]
+            roots = [ROOT.resolve(), *(Path(directory).resolve()
+                                      for directory in job.get('output_dirs', []))]
 
         path = Path(artifact).expanduser()
         if not path.is_absolute():

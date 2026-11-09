@@ -4,6 +4,7 @@ let prefs={...defaults}, jobs=[], history=[], catalogEntries=[], bridgeReady=fal
 let commandHistory=[],commandHistoryIndex=0,commandDraft='',jobStatusFilter='all',jobTimeFilter='all',jobSearch='';
 let auditCurrentJobs=[],auditCurrentIds=new Set(),auditPriorJobs=[],auditPriorCount=0,auditPriorWarnings=0,auditTargetId=null;
 const auditDetailsOpen=new Set();
+const auditRecordContents=new WeakMap();
 try{prefs={...defaults,...JSON.parse(localStorage.getItem('acw.preferences')||'{}')}}catch{}
 if(!['collapsed','canvas'].includes(prefs.layout))prefs.layout='collapsed';
 if(!prefs.canvasPositions||typeof prefs.canvasPositions!=='object')prefs.canvasPositions={};
@@ -34,8 +35,8 @@ function auditRecordMarkup(job){
   const events=Array.isArray(job.events)?job.events.filter(event=>event&&event.kind!=='output').map(event=>`${event.time||''} ${event.kind||'event'}: ${event.message||''}`.trim()).join('\n'):'';
   const artifacts=Array.isArray(job.artifacts)?job.artifacts:[];
   const details=[
-    output?`<section class="audit-detail"><h3>Captured output</h3><pre>${escapeHTML(output)}</pre></section>`:'',
-    events?`<section class="audit-detail"><h3>Events and errors</h3><pre>${escapeHTML(events)}</pre></section>`:'',
+    output?`<section class="audit-detail"><h3>Captured output</h3><pre data-audit-scroll="output">${escapeHTML(output)}</pre></section>`:'',
+    events?`<section class="audit-detail"><h3>Events and errors</h3><pre data-audit-scroll="events">${escapeHTML(events)}</pre></section>`:'',
     artifacts.length?`<section class="audit-detail"><h3>Reported artifacts and paths</h3><ul class="audit-paths">${artifacts.map(path=>`<li>${escapeHTML(path)}</li>`).join('')}</ul></section>`:'',
     !output&&!events&&!artifacts.length?'<p class="subtle">This stored record has summary data only.</p>':''
   ].join('');
@@ -50,6 +51,56 @@ function bindAuditDetails(root){
     };
   });
 }
+function renderAuditRecords(root,records,emptyMessage){
+  const page=$('log-audit-page');
+  const pageTop=page.scrollTop,pageLeft=page.scrollLeft;
+  const visibleTop=page.getBoundingClientRect().top;
+  const previous=new Map([...root.querySelectorAll('.audit-record')].map(record=>
+    [record.querySelector('details').dataset.auditDetail,record]
+  ));
+  const anchor=[...previous.values()].find(record=>record.getBoundingClientRect().bottom>visibleTop);
+  const anchorTop=anchor?.getBoundingClientRect().top;
+  let cursor=root.firstElementChild;
+  for(const job of records){
+    const id=String(job.id||job.job_id||'unknown');
+    let record=previous.get(id);
+    previous.delete(id);
+    if(record){
+      if(record.querySelector('details').open)auditDetailsOpen.add(id);
+      else auditDetailsOpen.delete(id);
+    }
+    const markup=auditRecordMarkup(job);
+    if(!record||auditRecordContents.get(record)!==markup){
+      const scrolls=[...(record?.querySelectorAll('[data-audit-scroll]')||[])].map(panel=>
+        ({key:panel.dataset.auditScroll,top:panel.scrollTop,left:panel.scrollLeft})
+      );
+      const summaryFocused=record?.querySelector('summary')===document.activeElement;
+      const template=document.createElement('template');
+      template.innerHTML=markup;
+      const updated=template.content.firstElementChild;
+      if(record)record.replaceChildren(...updated.childNodes);
+      else record=updated;
+      auditRecordContents.set(record,markup);
+      bindAuditDetails(record);
+      for(const saved of scrolls){
+        const panel=record.querySelector(`[data-audit-scroll="${saved.key}"]`);
+        if(panel){panel.scrollTop=saved.top;panel.scrollLeft=saved.left}
+      }
+      if(summaryFocused)record.querySelector('summary').focus({preventScroll:true});
+    }
+    if(record!==cursor)root.insertBefore(record,cursor);
+    cursor=record.nextElementSibling;
+  }
+  for(const record of previous.values())record.remove();
+  // Remove the old empty placeholder once records arrive.
+  root.querySelectorAll(':scope > .empty').forEach(placeholder=>placeholder.remove());
+  if(!records.length){
+    const empty=document.createElement('div');empty.className='empty';
+    empty.textContent=emptyMessage;root.replaceChildren(empty);
+  }
+  page.scrollTop=anchor?.isConnected?page.scrollTop+anchor.getBoundingClientRect().top-anchorTop:pageTop;
+  page.scrollLeft=pageLeft;
+}
 function auditSearchMatches(job,query){
   const terms=query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
   if(!terms.length)return true;
@@ -61,9 +112,8 @@ function renderAuditCurrent(){
   const status=$('audit-current-status').value;
   let matches=auditCurrentJobs.filter(job=>(status==='all'||job.status===status)&&auditSearchMatches(job,query));
   if(auditTargetId)matches=matches.filter(job=>job.id===auditTargetId);
-  $('audit-current-results').innerHTML=matches.map(auditRecordMarkup).join('')||
-    `<div class="empty">${auditTargetId?'This job is not part of the current app session.':'No current-session jobs match these filters.'}</div>`;
-  bindAuditDetails($('audit-current-results'));
+  renderAuditRecords($('audit-current-results'),matches,
+    auditTargetId?'This job is not part of the current app session.':'No current-session jobs match these filters.');
 }
 async function refreshAuditCurrent(){
   if(!bridgeReady)return;
@@ -80,9 +130,7 @@ function renderAuditPrior(){
   const results=$('audit-prior-results');
   const status=$('audit-prior-filter-status').value;
   const matches=auditPriorJobs.filter(job=>status==='all'||job.status===status);
-  results.innerHTML=matches.map(auditRecordMarkup).join('')||
-    '<div class="empty">No stored runs match this search.</div>';
-  bindAuditDetails(results);
+  renderAuditRecords(results,matches,'No stored runs match this search.');
   $('audit-prior-status').textContent=`${matches.length} shown of ${auditPriorCount} matching stored run${auditPriorCount===1?'':'s'}${auditPriorWarnings?` · ${auditPriorWarnings} unreadable record(s) were skipped`:''}`;
 }
 function selectAuditView(view){

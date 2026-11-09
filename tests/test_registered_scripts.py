@@ -3,7 +3,9 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import acw.engine as engine_module
@@ -49,6 +51,148 @@ class RegisteredScriptTests(unittest.TestCase):
             'Run the registered task',
             True,
         )
+
+    def test_invalid_session_load_preserves_workspace_and_saved_session(self):
+        self.register_external()
+        with patch.object(self.engine, '_launch'):
+            job_id = self.engine.start('custom-task')['id']
+        self.engine.jobs[job_id]['status'] = 'completed'
+        self.engine._auto_save_session()
+        before = self.engine.snapshot()
+        saved = engine_module.SESSION_FILE.read_bytes()
+        scripts = dict(self.engine.job_scripts)
+        arguments = dict(self.engine.job_arguments)
+        invalid_sessions = [
+            [], None, {'jobs': {}}, {'jobs': [None]},
+            {'jobs': [{'id': ['invalid']}]},
+            {'jobs': [{'id': 'valid'}, {'id': []}]},
+            {'jobs': [{'id': 'duplicate'}, {'id': 'duplicate'}]},
+            {'jobs': [{'id': 'bad-output', 'output': 'not a list'}]},
+        ]
+        for data in invalid_sessions:
+            with self.subTest(data=data):
+                (self.sessions_directory / 'invalid.json').write_text(
+                    json.dumps(data), encoding='utf-8',
+                )
+                with self.assertRaises(ValueError):
+                    self.engine.load_session('invalid.json')
+                self.assertEqual(self.engine.snapshot(), before)
+                self.assertEqual(self.engine.job_scripts, scripts)
+                self.assertEqual(self.engine.job_arguments, arguments)
+                self.assertEqual(self.engine.audit_session_job_ids, {job_id})
+                self.assertEqual(engine_module.SESSION_FILE.read_bytes(), saved)
+
+    def test_invalid_last_session_does_not_prevent_startup(self):
+        for data in ([], None, {'jobs': {}}, {'jobs': [{'id': []}]},
+                     {'jobs': [{'id': 'valid'}, {'id': []}], 'max_concurrent': 2}):
+            with self.subTest(data=data):
+                engine_module.SESSION_FILE.write_text(json.dumps(data), encoding='utf-8')
+                restored = Engine()
+                self.assertEqual(restored.snapshot(), [])
+                self.assertEqual(restored.get_max_concurrent(), engine_module.DEFAULT_MAX_CONCURRENT)
+
+    def test_session_listing_and_name_lookup_skip_invalid_files(self):
+        self.sessions_directory.mkdir(exist_ok=True)
+        (self.sessions_directory / 'bad.json').write_text('[]', encoding='utf-8')
+        (self.sessions_directory / 'good.json').write_text(
+            json.dumps({'name': 'Friendly name', 'jobs': [{'id': 'old', 'status': 'running'}],
+                        'max_concurrent': 2}), encoding='utf-8',
+        )
+        self.assertEqual([item['name'] for item in self.engine.list_sessions()], ['Friendly name'])
+        result = self.engine.load_session('Friendly name')
+        self.assertEqual(result['jobs'], 1)
+        self.assertEqual(self.engine.jobs['old']['status'], 'interrupted')
+        self.assertIsNone(self.engine.jobs['old']['stage_started'])
+        self.assertEqual(self.engine.get_max_concurrent(), 2)
+
+    def test_external_artifact_roots_survive_restart_and_named_session_load(self):
+        with tempfile.TemporaryDirectory() as outside:
+            output = Path(outside).resolve()
+            artifact = output / 'result.txt'
+            artifact.write_text('result', encoding='utf-8')
+            other = output / 'not-reported.txt'
+            other.write_text('other', encoding='utf-8')
+            self.external_script.write_text(
+                '# ACW_COMMAND: custom-task\n# ACW_DESCRIPTION: Artifact test\n'
+                '# ACW_LABEL: Custom Task\n# ACW_OUTPUT_DIR: ' + str(output) + '\n',
+                encoding='utf-8',
+            )
+            self.register_external()
+            with patch.object(self.engine, '_launch'):
+                job_id = self.engine.start('custom-task')['id']
+            job = self.engine.jobs[job_id]
+            job['status'] = 'completed'
+            job['artifacts'] = [str(artifact)]
+            self.engine.save_session('artifacts')
+            # Older snapshots can recover roots from the trusted catalog.
+            legacy = json.loads(engine_module.SESSION_FILE.read_text(encoding='utf-8'))
+            legacy['jobs'][0].pop('output_dirs')
+            engine_module.SESSION_FILE.write_text(json.dumps(legacy), encoding='utf-8')
+            self.assertEqual(Engine()._artifact_path(job_id, str(artifact)), artifact)
+            self.engine._auto_save_session()
+            # The run's approved roots should survive later catalog changes.
+            self.engine.remove_registered_script('custom-task')
+            restored = Engine()
+            for engine in (self.engine, restored):
+                with self.subTest(engine=engine):
+                    self.assertEqual(engine._artifact_path(job_id, str(artifact)), artifact)
+                    with self.assertRaisesRegex(ValueError, 'not reported'):
+                        engine._artifact_path(job_id, str(other))
+            restored.clear_session()
+            restored.load_session('artifacts')
+            with patch.object(restored, '_open_path') as open_path:
+                restored.open_artifact(job_id, str(artifact))
+            open_path.assert_called_once_with(artifact)
+            with tempfile.TemporaryDirectory() as unapproved:
+                outside_roots = Path(unapproved) / 'outside.txt'
+                outside_roots.write_text('outside', encoding='utf-8')
+                restored.jobs[job_id]['artifacts'].append(str(outside_roots))
+                with self.assertRaisesRegex(ValueError, 'outside the project'):
+                    restored._artifact_path(job_id, str(outside_roots))
+
+    def test_valid_session_load_is_rejected_while_jobs_are_active(self):
+        self.register_external()
+        self.engine.save_session('empty')
+        with patch.object(engine_module.threading, 'Thread'):
+            job_id = self.engine.start('custom-task')['id']
+        before = self.engine.snapshot()
+        with self.assertRaisesRegex(ValueError, 'while jobs are active'):
+            self.engine.load_session('empty')
+        self.assertEqual(self.engine.snapshot(), before)
+        self.assertIn(job_id, self.engine.job_scripts)
+
+    def test_launch_failure_remains_in_audit_after_workspace_clear(self):
+        self.register_external()
+        with patch.object(self.engine, '_launch'):
+            job_id = self.engine.start('custom-task')['id']
+        with patch.object(engine_module.subprocess, 'Popen', side_effect=OSError('launch failed')):
+            self.engine._run(job_id)
+        self.engine.clear_session()
+        result = self.engine.search_audit(job_id)
+        self.assertEqual(result['count'], 1)
+        self.assertEqual(result['jobs'][0]['status'], 'failed')
+        self.assertTrue(any('launch failed' in event['message']
+                            for event in result['jobs'][0]['events']))
+
+    def test_stage_timings_accumulate_across_repeated_stages(self):
+        self.register_external()
+        with patch.object(self.engine, '_launch'):
+            job_id = self.engine.start('custom-task')['id']
+        job = self.engine.jobs[job_id]
+        job['stage'] = 'Recurring'
+        job['stage_started'] = '2026-01-01T00:00:00+00:00'
+        def change_stage(stage, second):
+            instant = datetime(2026, 1, 1, 0, 0, second, tzinfo=timezone.utc)
+            with patch.object(engine_module, 'datetime', wraps=datetime) as clock:
+                clock.now.return_value = instant
+                self.engine._read_output(job_id, SimpleNamespace(stdout=[
+                    'ACW_EVENT:' + json.dumps({'stage': stage}) + '\n',
+                ]))
+        change_stage('Other', 3)
+        change_stage('Recurring', 4)
+        change_stage('Other', 6)
+        self.assertEqual(job['stage_timings']['Recurring'], 5.0)
+        self.assertEqual(job['stage_timings']['Other'], 1.0)
 
     def test_registration_persists_path_and_working_directory(self):
         self.register_external()

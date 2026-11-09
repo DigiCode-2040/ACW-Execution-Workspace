@@ -139,6 +139,8 @@ ACW stores local execution data under `runs/`:
 
 Jobs that were active at shutdown are restored as interrupted, not restarted. Log Audit shows jobs started in the current app session and can search available saved snapshots, sessions, and successful-run history. It is an inspection view, not a complete archival guarantee for every failed or interrupted run.
 
+Session files are validated before loading; an invalid file leaves the current workspace intact. Malformed saved state is ignored during startup and omitted from the session list. Saved jobs retain their declared artifact output directories, including when a script is later removed from the catalog. Older snapshots recover these directories from the script's current catalog entry when available.
+
 ## Security and limitations
 
 - Only catalog-approved scripts can be started from the workspace.
