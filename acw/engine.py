@@ -1392,10 +1392,21 @@ class Engine:
 
 
 def DateTime_parse(iso_str):
-    """Parse ISO timestamp that may lack timezone."""
-    if iso_str.endswith('Z'):
-        iso_str = iso_str[:-1] + '+00:00'
+    """Parse ISO timestamps, normalizing missing timezone data to UTC."""
+    if not isinstance(iso_str, str):
+        raise TypeError('ISO timestamp must be a string.')
+    normalized = iso_str.strip()
+    if not normalized:
+        raise ValueError('ISO timestamp is empty.')
+    if normalized.endswith('Z'):
+        normalized = normalized[:-1] + '+00:00'
     try:
-        return datetime.fromisoformat(iso_str)
-    except ValueError:
-        return datetime.fromisoformat(iso_str).replace(tzinfo=timezone.utc)
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        try:
+            parsed = datetime.fromisoformat(normalized.replace(' ', 'T'))
+        except ValueError as inner_exc:
+            raise ValueError(f'Invalid ISO timestamp: {iso_str!r}') from inner_exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

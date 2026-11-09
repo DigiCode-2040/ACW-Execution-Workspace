@@ -532,6 +532,18 @@ class RegisteredScriptTests(unittest.TestCase):
         self.assertIsNone(self.engine.jobs[job_id]['stage_started'])
         self.assertIn('Queued', self.engine.jobs[job_id]['stage_timings'])
 
+    def test_datetime_parse_normalizes_missing_timezone_and_invalid_values(self):
+        self.assertEqual(
+            engine_module.DateTime_parse('2025-01-02T03:04:05').tzinfo,
+            engine_module.timezone.utc,
+        )
+        self.assertEqual(
+            engine_module.DateTime_parse('2025-01-02T03:04:05Z').isoformat(),
+            '2025-01-02T03:04:05+00:00',
+        )
+        with self.assertRaisesRegex(ValueError, 'Invalid ISO timestamp'):
+            engine_module.DateTime_parse('not-a-date')
+
 
 if __name__ == '__main__':
     unittest.main()
