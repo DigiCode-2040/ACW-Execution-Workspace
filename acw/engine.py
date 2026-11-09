@@ -641,7 +641,16 @@ class Engine:
         job = self.jobs.get(job_id)
         if not job or job['status'] != 'queued':
             return
-        threading.Thread(target=self._run, args=(job_id,), daemon=True).start()
+        # Reserve the slot before the worker can compete for the scheduler lock.
+        job['status'] = 'running'
+        try:
+            threading.Thread(target=self._run, args=(job_id,), daemon=True).start()
+        except Exception as exc:
+            job['status'] = 'failed'
+            job['ended'] = stamp()
+            self._event(job, 'error', f'Unable to start worker: {exc}')
+            self._save(job)
+            self._auto_save_session()
 
     def _drain_queue(self):
         """Launch queued jobs up to max_concurrent. Caller must hold lock."""
@@ -674,6 +683,16 @@ class Engine:
         with self.lock:
             job = self.jobs.get(job_id)
             if not job:
+                return
+            if job['status'] == 'cancelling':
+                job['status'] = 'cancelled'
+                job['ended'] = stamp()
+                self._event(job, 'cancelled', 'Cancelled before process start')
+                self._save(job)
+                self._auto_save_session()
+                self._drain_queue()
+                return
+            if job['status'] not in ('queued', 'running'):
                 return
             script = self.job_scripts[job_id]
             path = Path(script['path']).resolve()

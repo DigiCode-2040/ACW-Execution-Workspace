@@ -62,6 +62,65 @@ class RegisteredScriptTests(unittest.TestCase):
         self.assertEqual(registered['working_directory'], str(self.external_directory.resolve()))
         self.assertTrue(registered['available'])
 
+    def test_slots_are_reserved_before_workers_start_and_queue_drains_in_order(self):
+        self.register_external()
+        self.engine.set_max_concurrent(1)
+        # Delay every worker deterministically, including while the queue drains.
+        with patch.object(engine_module.threading, 'Thread') as thread:
+            ids = [self.engine.start('custom-task')['id'] for _ in range(5)]
+            self.assertEqual(thread.return_value.start.call_count, 1)
+            self.assertEqual(list(self.engine.queue), ids[1:])
+            for index, job_id in enumerate(ids):
+                self.assertEqual(self.engine.jobs[job_id]['status'], 'running')
+                with self.engine.lock:
+                    self.engine.jobs[job_id]['status'] = 'completed'
+                    self.engine._drain_queue()
+                    self.assertLessEqual(self.engine._running_count(), 1)
+                self.assertEqual(thread.return_value.start.call_count, min(index + 2, 5))
+                self.assertEqual(list(self.engine.queue), ids[index + 2:])
+
+    def test_limit_changes_respect_reserved_slots(self):
+        self.register_external()
+        self.engine.set_max_concurrent(1)
+        with patch.object(engine_module.threading, 'Thread') as thread:
+            ids = [self.engine.start('custom-task')['id'] for _ in range(5)]
+            self.engine.set_max_concurrent(3)
+            self.assertEqual(thread.return_value.start.call_count, 3)
+            self.engine.set_max_concurrent(1)
+            with self.engine.lock:
+                for job_id in ids[:2]:
+                    self.engine.jobs[job_id]['status'] = 'completed'
+                    self.engine._drain_queue()
+            self.assertEqual(thread.return_value.start.call_count, 3)
+            self.assertEqual(list(self.engine.queue), ids[3:])
+
+    def test_cancellation_before_worker_starts_releases_slot(self):
+        self.register_external()
+        self.engine.set_max_concurrent(1)
+        with patch.object(engine_module.threading, 'Thread'), \
+                patch.object(engine_module.subprocess, 'Popen') as popen:
+            first = self.engine.start('custom-task')['id']
+            second = self.engine.start('custom-task')['id']
+            self.engine.cancel(first)
+            self.engine._run(first)
+            popen.assert_not_called()
+            self.assertEqual(self.engine.jobs[first]['status'], 'cancelled')
+            self.assertEqual(self.engine.jobs[second]['status'], 'running')
+
+    def test_thread_start_failure_releases_slot_and_queue_continues(self):
+        self.register_external()
+        self.engine.set_max_concurrent(1)
+        with patch.object(engine_module.threading, 'Thread') as thread:
+            ids = [self.engine.start('custom-task')['id'] for _ in range(3)]
+            thread.return_value.start.side_effect = [RuntimeError('no thread'), None]
+            with self.engine.lock:
+                self.engine.jobs[ids[0]]['status'] = 'completed'
+                self.engine._drain_queue()
+            self.assertEqual(self.engine.jobs[ids[1]]['status'], 'failed')
+            self.assertEqual(self.engine.jobs[ids[2]]['status'], 'running')
+            self.assertEqual(self.engine._running_count(), 1)
+            self.assertFalse(self.engine.queue)
+
     def test_invalid_script_and_working_directory_are_rejected(self):
         not_python = self.external_directory / 'notes.txt'
         not_python.write_text('not a script', encoding='utf-8')
@@ -186,7 +245,8 @@ class RegisteredScriptTests(unittest.TestCase):
             encoding='utf-8',
         )
 
-        catalog = self.engine.reload_catalog()
+        with patch.object(self.engine, '_script_available', return_value=True):
+            catalog = self.engine.reload_catalog()
         entry = next(item for item in catalog if item['name'] == 'batch-task')
         self.assertEqual(entry['description'], 'Updated description')
         self.assertEqual(entry['label'], 'Updated label')
@@ -203,7 +263,8 @@ class RegisteredScriptTests(unittest.TestCase):
             if item['name'] == 'batch-task'
         )
         self.assertFalse(registered['available'])
-        self.assertIn('no longer matches', registered['reason'])
+        expected_reason = 'no longer matches' if os.name == 'nt' else 'only run on Windows'
+        self.assertIn(expected_reason, registered['reason'])
 
     def test_batch_runtime_arguments_are_rejected_before_launch(self):
         batch = self.external_directory / 'batch_task.bat'
@@ -223,7 +284,8 @@ class RegisteredScriptTests(unittest.TestCase):
         launch.assert_not_called()
 
     def test_batch_launch_uses_quoted_path_without_user_arguments(self):
-        command = Engine._batch_launch_command(self.external_directory / 'a batch task.cmd')
+        with patch.object(Engine, '_batch_cmd_executable', return_value='cmd.exe'):
+            command = Engine._batch_launch_command(self.external_directory / 'a batch task.cmd')
 
         self.assertIn(' /d /s /c ', command)
         self.assertTrue(command.endswith(f'""{self.external_directory / "a batch task.cmd"}""'))
