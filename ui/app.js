@@ -1,7 +1,9 @@
 'use strict';
 const defaults={theme:'cyan',layout:'collapsed',historyCount:5,opacity:78,glow:true,compact:false,canvasZoom:1,canvasPositions:{},selectedScript:null,monitors:['cpu','systemmem','taskmem','started','ended','runtime','events','quality']};
 let prefs={...defaults}, jobs=[], history=[], catalogEntries=[], bridgeReady=false, busy=false;
-let commandHistory=[],commandHistoryIndex=0,commandDraft='',jobStatusFilter='all',jobTimeFilter='all',jobSearch='';
+let commandHistory=[],commandHistoryIndex=0,commandDraft='',jobStatusFilter='all',jobTimeFilter='recent',jobSearch='';
+let liveEventsPaused=false,clearedEventKeys=new Set();
+const RECENT_JOB_MS=15*60*1000;
 let auditCurrentJobs=[],auditCurrentIds=new Set(),auditPriorJobs=[],auditPriorCount=0,auditPriorWarnings=0,auditTargetId=null;
 const auditDetailsOpen=new Set();
 const auditRecordContents=new WeakMap();
@@ -189,6 +191,7 @@ function jobDetails(j){
   const panels=`<div class="panels">
     <div class="pane"><h3>TASK / OVERVIEW</h3>
       ${metric('Script',j.name)}
+      ${j.group_name?metric('Group',j.group_name):''}
       ${show('started','Started',j.started||'—')}
       ${show('ended','Ended',j.ended||'—')}
       ${show('runtime','Runtime',formatRuntime(j.runtime))}
@@ -229,28 +232,74 @@ function resizeCanvasWorld(node){
   world.style.height=`${Math.ceil(Math.max(parseFloat(world.style.height)||0,$('jobs').clientHeight-2,bottom))}px`;
 }
 function renderConnectedOverview(){
-  const eventsList=$('live-events-list');
-  const eventsScrollTop=eventsList.scrollTop;
+  const scopedJobs=jobTimeFilter==='recent'?jobs.filter(job=>isWorkspaceJob(job)):jobs;
   const counts={
-    running:jobs.filter(job=>job.status==='running').length,
-    completed:jobs.filter(job=>job.status==='completed').length,
-    failed:jobs.filter(job=>job.status==='failed').length
+    running:scopedJobs.filter(job=>job.status==='running').length,
+    completed:scopedJobs.filter(job=>job.status==='completed').length,
+    failed:scopedJobs.filter(job=>job.status==='failed').length
   };
   document.querySelectorAll('[data-total]').forEach(card=>{
     const key=card.dataset.total;
     card.querySelector('.total-value').textContent=counts[key];
     card.setAttribute('aria-pressed',String(jobStatusFilter===key));
   });
-  const events=jobs.flatMap(job=>(job.events||[]).map(event=>({...event,jobLabel:job.label,jobId:job.id})))
-    .sort((a,b)=>(Date.parse(b.time)||0)-(Date.parse(a.time)||0)).slice(0,14);
-  $('live-events-list').innerHTML=events.map(event=>{
+  renderLiveEvents();
+}
+function isRecentJob(job,now=Date.now()){
+  const ended=Date.parse(job.ended||'');
+  return Number.isFinite(ended)&&ended<=now&&now-ended<=RECENT_JOB_MS;
+}
+function isActiveJob(job){return ['queued','running','cancelling'].includes(job.status)}
+function failureDismissButton(job){
+  return job.status==='failed'&&!job.failure_dismissed?`<button type="button" data-dismiss-failure="${escapeHTML(job.id)}" title="Dismiss from the default workspace; keep this run under Any time and in Log Audit">Dismiss</button>`:'';
+}
+function isWorkspaceJob(job,now=Date.now()){
+  if(isActiveJob(job))return true;
+  if(job.status==='failed')return !job.failure_dismissed;
+  return isRecentJob(job,now);
+}
+function workspaceEvents(){
+  return jobs.flatMap(job=>(job.events||[]).map((event,index)=>({...event,
+    key:JSON.stringify([job.id,event.id||[index,event.time,event.kind,event.message]]),
+    jobLabel:job.label,jobId:job.id,eventOrder:index,eligible:isActiveJob(job)||isRecentJob(job)
+  })));
+}
+function renderLiveEvents(){
+  $('live-events-state').textContent=liveEventsPaused?'Paused':'Live';
+  $('live-events-pause').textContent=liveEventsPaused?'Resume':'Pause';
+  $('live-events-pause').setAttribute('aria-pressed',String(liveEventsPaused));
+  if(liveEventsPaused)return;
+  const eventsList=$('live-events-list');
+  const eventsScrollTop=eventsList.scrollTop;
+  const previous=new Map([...eventsList.querySelectorAll('[data-feed-key]')].map(node=>[node.dataset.feedKey,node]));
+  const visibleTop=eventsList.getBoundingClientRect().top;
+  const anchor=eventsScrollTop>0?[...previous.values()].find(node=>node.getBoundingClientRect().bottom>visibleTop):null;
+  const anchorTop=anchor?.getBoundingClientRect().top;
+  const events=workspaceEvents().filter(event=>event.eligible&&!clearedEventKeys.has(event.key))
+    .sort((a,b)=>(Date.parse(b.time)||0)-(Date.parse(a.time)||0)||b.eventOrder-a.eventOrder).slice(0,20);
+  let cursor=eventsList.firstElementChild;
+  for(const event of events){
     const time=Date.parse(event.time);
     const kind=String(event.kind||'info').toLowerCase();
     const status=kind==='error'||kind==='failed'?'failed':kind==='warning'?'warning':
       ['completed','running','queued','cancelled','cancelling'].includes(kind)?kind:'info';
-    return `<li class="live-event"><time>${Number.isNaN(time)?'--:--:--':escapeHTML(new Date(time).toLocaleTimeString())}</time><span class="event-dot ${status}" aria-hidden="true"></span><div class="event-copy"><b>${escapeHTML(event.jobLabel||event.jobId)}</b><span class="event-message">${escapeHTML(event.message)}</span></div></li>`;
-  }).join('')||'<li class="live-events-empty">Events will appear here as jobs run.</li>';
-  eventsList.scrollTop=eventsScrollTop;
+    let node=previous.get(event.key);
+    previous.delete(event.key);
+    if(!node){
+      node=document.createElement('li');node.className='live-event';node.dataset.feedKey=event.key;
+      node.innerHTML=`<time>${Number.isNaN(time)?'--:--:--':escapeHTML(new Date(time).toLocaleTimeString())}</time><span class="event-dot ${status}" aria-hidden="true"></span><div class="event-copy"><b>${escapeHTML(event.jobLabel||event.jobId)}</b><span class="event-message">${escapeHTML(event.message)}</span></div>`;
+    }
+    if(node!==cursor)eventsList.insertBefore(node,cursor);
+    cursor=node.nextElementSibling;
+  }
+  previous.forEach(node=>node.remove());
+  eventsList.querySelectorAll('.live-events-empty').forEach(node=>node.remove());
+  if(!events.length){
+    const empty=document.createElement('li');empty.className='live-events-empty';
+    empty.textContent=clearedEventKeys.size?'Feed cleared. New events will appear here.':'No events from active or recently finished jobs.';
+    eventsList.replaceChildren(empty);
+  }
+  eventsList.scrollTop=anchor?.isConnected?eventsList.scrollTop+anchor.getBoundingClientRect().top-anchorTop:eventsScrollTop;
 }
 function formatRuntime(seconds){
   const total=Math.max(0,Math.floor(Number(seconds)||0));
@@ -292,7 +341,7 @@ function renderJobs(){
     const statusMatches=jobStatusFilter==='all'||(jobStatusFilter==='active'?['queued','running','cancelling'].includes(job.status):job.status===jobStatusFilter);
     const startedAt=Date.parse(job.started||'');
     const ageLimit=jobTimeFilter==='hour'?60*60*1000:jobTimeFilter==='day'?24*60*60*1000:null;
-    const timeMatches=ageLimit===null||(Number.isFinite(startedAt)&&startedAt<=now&&now-startedAt<=ageLimit);
+    const timeMatches=jobTimeFilter==='recent'?isWorkspaceJob(job,now):ageLimit===null||(Number.isFinite(startedAt)&&startedAt<=now&&now-startedAt<=ageLimit);
     const searchable=[job.label,job.name,job.id,job.status,job.stage,...(job.events||[]).filter(event=>event.kind!=='output').map(event=>event.message),...(job.artifacts||[])].join(' ').toLowerCase();
     return statusMatches&&timeMatches&&searchable.includes(jobSearch.toLowerCase());
   });
@@ -303,12 +352,12 @@ function renderJobs(){
   controls.hidden=prefs.layout!=='canvas';
   $('canvas-zoom-label').textContent=`${Math.round(prefs.canvasZoom*100)}%`;
   if(!jobs.length){el.innerHTML='<div class="empty">No executions yet. Select a script above or type run &lt;command&gt;.</div>';restoreScroll();return}
-  if(!matches.length){el.innerHTML='<div class="empty">No jobs match the current filters.</div>';restoreScroll();return}
+  if(!matches.length){el.innerHTML=`<div class="empty">${jobStatusFilter==='all'&&jobTimeFilter==='recent'&&!jobSearch?'No active jobs, recent completions, or undismissed failures. Choose Any time to see all jobs.':'No jobs match the current filters.'}</div>`;restoreScroll();return}
   if(prefs.layout==='collapsed'){
     el.innerHTML=matches.map(job=>{
       const progress=Math.max(0,Math.min(100,Number(job.progress)||0));
       const expanded=connectedExpanded.has(job.id);
-      return `<article class="job connected-job status-${escapeHTML(job.status)}"><div class="connected-job-row"><div class="connected-job-name"><span class="connected-status-dot" aria-hidden="true"></span><div><b>${escapeHTML(job.label)} ${kindBadge(job.kind)}</b><span>${escapeHTML(job.name)} · ${escapeHTML(job.stage||job.status)}</span></div></div><span class="connected-job-runtime">${formatRuntime(job.runtime)}</span><div class="connected-progress" role="progressbar" aria-label="Progress for ${escapeHTML(job.label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span><i style="width:${progress}%"></i></span><b>${progress}%</b></div><span class="pill ${escapeHTML(job.status)}"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span><div class="connected-job-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}<button class="job-audit-button" type="button" data-audit-job="${escapeHTML(job.id)}" title="View this job in Log Audit">Audit</button><button class="connected-details-toggle" type="button" data-job-details="${escapeHTML(job.id)}" aria-label="${expanded?'Hide':'Show'} details for ${escapeHTML(job.label)}" aria-expanded="${expanded}">${expanded?'−':'+'}</button></div></div><div class="connected-job-details"${expanded?'':' hidden'}>${jobDetails(job)}</div></article>`;
+      return `<article class="job connected-job status-${escapeHTML(job.status)}"><div class="connected-job-row"><div class="connected-job-name"><span class="connected-status-dot" aria-hidden="true"></span><div><b>${escapeHTML(job.label)} ${kindBadge(job.kind)}</b><span>${escapeHTML(job.name)} · ${escapeHTML(job.stage||job.status)}</span></div></div><span class="connected-job-runtime">${formatRuntime(job.runtime)}</span><div class="connected-progress" role="progressbar" aria-label="Progress for ${escapeHTML(job.label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span><i style="width:${progress}%"></i></span><b>${progress}%</b></div><span class="pill ${escapeHTML(job.status)}"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span><div class="connected-job-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}${failureDismissButton(job)}<button class="job-audit-button" type="button" data-audit-job="${escapeHTML(job.id)}" title="View this job in Log Audit">Audit</button><button class="connected-details-toggle" type="button" data-job-details="${escapeHTML(job.id)}" aria-label="${expanded?'Hide':'Show'} details for ${escapeHTML(job.label)}" aria-expanded="${expanded}">${expanded?'−':'+'}</button></div></div><div class="connected-job-details"${expanded?'':' hidden'}>${jobDetails(job)}</div></article>`;
     }).join('');
   }else if(prefs.layout==='canvas'){
     const positions=matches.map(job=>canvasPosition(job,Math.max(0,jobs.findIndex(candidate=>candidate.id===job.id))));
@@ -319,7 +368,7 @@ function renderJobs(){
       const progress=Math.max(0,Math.min(100,Number(job.progress)||0));
       const position=positions[index];
       const expanded=canvasExpanded.has(job.id);
-      return `<article class="job canvas-node ${escapeHTML(job.status)} status-${escapeHTML(job.status)}${expanded?' expanded':''}" data-job-id="${escapeHTML(job.id)}" style="--node-x:${position.x}px;--node-y:${position.y}px;--progress-angle:${progress*3.6}deg"><div class="canvas-node-head"><div class="canvas-node-grab" title="Drag to arrange this job"><button class="canvas-expand" aria-expanded="${expanded}" aria-label="${expanded?'Collapse':'Expand'} details for ${escapeHTML(job.label)}"><span class="progress-ring" aria-hidden="true"></span><span class="canvas-node-copy"><b>${escapeHTML(job.label)} ${kindBadge(job.kind)}</b><span class="canvas-stage">${escapeHTML(job.stage||job.status)} · ${progress}%</span></span></button><span class="canvas-node-status"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span></div><div class="canvas-node-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}<button class="job-audit-button" type="button" data-audit-job="${escapeHTML(job.id)}" title="View this job in Log Audit">Audit</button><span class="meta">#${escapeHTML(job.id)}</span></div></div>${jobDetails(job)}</article>`;
+      return `<article class="job canvas-node ${escapeHTML(job.status)} status-${escapeHTML(job.status)}${expanded?' expanded':''}" data-job-id="${escapeHTML(job.id)}" style="--node-x:${position.x}px;--node-y:${position.y}px;--progress-angle:${progress*3.6}deg"><div class="canvas-node-head"><div class="canvas-node-grab" title="Drag to arrange this job"><button class="canvas-expand" aria-expanded="${expanded}" aria-label="${expanded?'Collapse':'Expand'} details for ${escapeHTML(job.label)}"><span class="progress-ring" aria-hidden="true"></span><span class="canvas-node-copy"><b>${escapeHTML(job.label)} ${kindBadge(job.kind)}</b><span class="canvas-stage">${escapeHTML(job.stage||job.status)} · ${progress}%</span></span></button><span class="canvas-node-status"><span class="status-symbol" aria-hidden="true">${statusSymbol(job.status)}</span>${escapeHTML(job.status)}</span></div><div class="canvas-node-actions">${job.status==='running'?`<button class="cancel" aria-label="Stop ${escapeHTML(job.label)}" data-id="${escapeHTML(job.id)}">Stop</button>`:''}${failureDismissButton(job)}<button class="job-audit-button" type="button" data-audit-job="${escapeHTML(job.id)}" title="View this job in Log Audit">Audit</button><span class="meta">#${escapeHTML(job.id)}</span></div></div>${jobDetails(job)}</article>`;
     }).join('')}</div></div>`;
     el.querySelectorAll('.canvas-node').forEach(node=>{
       const id=node.dataset.jobId;
@@ -391,6 +440,15 @@ function renderJobs(){
     catch(error){log('Error: '+(error.message||error))}
   });
   el.querySelectorAll('[data-audit-job]').forEach(button=>button.onclick=()=>openJobAudit(button.dataset.auditJob));
+  el.querySelectorAll('[data-dismiss-failure]').forEach(button=>button.onclick=async()=>{
+    button.disabled=true;
+    try{
+      const id=button.dataset.dismissFailure;
+      await window.pywebview.api.dismiss_failure(id);
+      const job=jobs.find(item=>item.id===id);if(job)job.failure_dismissed=true;
+      renderJobs();log('Failure dismissed. The run remains available under Any time and in Log Audit.');
+    }catch(error){log('Unable to dismiss failure: '+(error.message||error));button.disabled=false}
+  });
   el.querySelectorAll('[data-job-details]').forEach(button=>button.onclick=()=>{
     const id=button.dataset.jobDetails;
     if(connectedExpanded.has(id))connectedExpanded.delete(id);
@@ -597,15 +655,16 @@ async function refreshCatalog(reload=false){
   select.onchange=()=>{prefs.selectedScript=select.value||null;save();$('catalog-description').textContent=catalogEntries.find(entry=>entry.name===select.value)?.description||'';$('edit-script').disabled=!select.value};
   $('jobs').querySelector('.empty')?.replaceChildren(document.createTextNode('No executions yet. Select a script above or type run <command>.'));
 }
-const jobFilters=document.createElement('div');jobFilters.id='job-filters';jobFilters.innerHTML='<strong class="jobs-title">JOBS</strong><select id="job-status-filter" aria-label="Filter jobs by status"><option value="all">All statuses</option><option value="active">Active</option><option value="queued">Queued</option><option value="running">Running</option><option value="cancelling">Cancelling</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select><select id="job-time-filter" aria-label="Filter jobs by start time"><option value="all">Any time</option><option value="hour">Started in last hour</option><option value="day">Started in last 24 hours</option></select><input id="job-search" type="search" aria-label="Search jobs" placeholder="Search jobs and artifacts"><span id="job-filter-count" class="subtle" aria-live="polite">0 of 0</span>';document.querySelector('.workspace-head').after(jobFilters);$('job-status-filter').onchange=e=>{jobStatusFilter=e.target.value;renderJobs()};$('job-time-filter').onchange=e=>{jobTimeFilter=e.target.value;renderJobs()};$('job-search').oninput=e=>{jobSearch=e.target.value.trim();renderJobs()};
+const jobFilters=document.createElement('div');jobFilters.id='job-filters';jobFilters.innerHTML='<strong class="jobs-title">JOBS</strong><select id="job-status-filter" aria-label="Filter jobs by status"><option value="all">All statuses</option><option value="active">Active</option><option value="queued">Queued</option><option value="running">Running</option><option value="cancelling">Cancelling</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select><select id="job-time-filter" aria-label="Filter jobs by time" title="Last 15 minutes also keeps active jobs and undismissed failures visible"><option value="all">Any time</option><option value="recent" selected>Last 15 minutes</option><option value="hour">Started in last hour</option><option value="day">Started in last 24 hours</option></select><input id="job-search" type="search" aria-label="Search jobs" placeholder="Search jobs and artifacts"><span id="job-filter-count" class="subtle" aria-live="polite">0 of 0</span>';document.querySelector('.workspace-head').after(jobFilters);$('job-status-filter').onchange=e=>{jobStatusFilter=e.target.value;renderJobs()};$('job-time-filter').onchange=e=>{jobTimeFilter=e.target.value;renderJobs()};$('job-search').oninput=e=>{jobSearch=e.target.value.trim();renderJobs()};
 function setPage(page){
   const activePage=typeof page==='boolean'?(page?'manage':'execution'):page;
   $('execution-page').hidden=activePage!=='execution';
   $('manage-work-page').hidden=activePage!=='manage';
   $('log-audit-page').hidden=activePage!=='audit';
   $('manage-work-nav').setAttribute('aria-pressed',String(activePage==='manage'));
+  $('workspace-nav').setAttribute('aria-pressed',String(activePage==='execution'));
   $('log-audit-nav').setAttribute('aria-pressed',String(activePage==='audit'));
-  if(activePage==='manage')loadRegisteredScripts();
+  if(activePage==='manage'){loadRegisteredScripts();loadAutomation(true)}
 }
 function setManageMessage(message,isError=false){
   const target=$('manage-message');
@@ -619,6 +678,7 @@ async function loadRegisteredScripts(){
   if(!bridgeReady)return;
   try{
     const scripts=await window.pywebview.api.registered_scripts();
+    loadAutomation(true);
     const list=$('registered-scripts-list');
     list.innerHTML=scripts.map(script=>`<article class="registered-script${script.available?'':' unavailable'}"><div><h3>${escapeHTML(script.label)} ${kindBadge(script.kind)} <span class="subtle">(${escapeHTML(script.name)})</span></h3><p>${script.available?'Available':escapeHTML(script.reason||'Unavailable')}</p><p>${escapeHTML(script.description||'')}</p><p>Script: <code>${escapeHTML(script.path)}</code></p><p>Working directory: <code>${escapeHTML(script.working_directory)}</code></p></div><div class="registered-script-actions">${script.available?'':`<button type="button" data-relink-script="${escapeHTML(script.name)}">Relink…</button>`}<button type="button" data-remove-script="${escapeHTML(script.name)}">Remove</button></div></article>`).join('')||'<p class="subtle">No external scripts registered yet.</p>';
     list.querySelectorAll('[data-relink-script]').forEach(button=>button.onclick=async()=>{
@@ -644,6 +704,12 @@ async function loadRegisteredScripts(){
   }catch(error){setManageMessage(error.message||String(error),true)}
 }
 function setupManageWork(){
+  $('workspace-nav').onclick=()=>{
+    jobStatusFilter='all';jobTimeFilter='recent';jobSearch='';
+    $('job-status-filter').value='all';
+    $('job-time-filter').value='recent';$('job-search').value='';
+    closeMenus();setPage('execution');renderJobs();
+  };
   $('manage-work-nav').onclick=()=>setPage('manage');
   $('execution-page-nav').onclick=()=>setPage('execution');
   const form=$('register-script-form');
@@ -728,11 +794,19 @@ const liveEvents=document.createElement('aside');
 liveEvents.id='live-events';
 liveEvents.className='live-events';
 liveEvents.setAttribute('aria-label','Recent job events');
-liveEvents.innerHTML='<div class="live-events-head"><h2>LIVE EVENTS</h2><span><i></i> Live</span></div><ol id="live-events-list"><li class="live-events-empty">Events will appear here as jobs run.</li></ol>';
+liveEvents.innerHTML='<div class="live-events-head"><h2>LIVE EVENTS</h2><span id="live-events-state" role="status">Live</span></div><div class="live-events-controls"><button id="live-events-pause" type="button" aria-pressed="false">Pause</button><button id="live-events-clear" type="button" title="Clear this feed without deleting job logs">Clear feed</button><span>Latest 20 events</span></div><ol id="live-events-list"><li class="live-events-empty">Events will appear here as jobs run.</li></ol>';
 const workspaceHead=document.querySelector('.workspace-head');
 workspaceHead.after(connectedDashboard);
 connectedDashboard.append(jobsColumn,liveEvents);
 jobsColumn.append(jobFilters,$('jobs'));
+$('live-events-pause').onclick=()=>{liveEventsPaused=!liveEventsPaused;renderLiveEvents()};
+$('live-events-clear').onclick=()=>{
+  clearedEventKeys=new Set(workspaceEvents().map(event=>event.key));
+  $('live-events-list').replaceChildren();
+  const empty=document.createElement('li');empty.className='live-events-empty';
+  empty.textContent='Feed cleared. Job logs remain in Log Audit.';
+  $('live-events-list').append(empty);renderLiveEvents();
+};
 connectedSummary.querySelectorAll('[data-total]').forEach(card=>card.onclick=()=>{
   jobStatusFilter=card.dataset.total;
   $('job-status-filter').value=jobStatusFilter;
@@ -844,7 +918,7 @@ $('command').addEventListener('keydown',e=>{
 });
 $('run-demo').onclick=()=>bridgeReady&&scriptSelect.value?command('run '+scriptSelect.value):log(bridgeReady?'No runnable scripts found. Add a script in Manage Work or add ACW metadata.':'Launch with python main.py');
 function refreshClock(){$('clock').textContent=new Date().toLocaleString()};refreshClock();setInterval(refreshClock,1000);setupMenus();setupManageWork();setupAudit();apply();
-async function poll(){if(!bridgeReady||busy)return;busy=true;try{jobs=await window.pywebview.api.jobs();if(!(prefs.layout==='canvas'&&canvasDragging))renderJobs();if(!$('log-audit-page').hidden){try{auditCurrentJobs=await window.pywebview.api.audit_current_session();auditCurrentIds=new Set(auditCurrentJobs.map(job=>job.id));renderAuditCurrent()}catch(error){$('audit-current-results').textContent='Unable to refresh current-session jobs: '+(error.message||error)}}if(!jobs.length)$('jobs').querySelector('.empty').textContent='No executions yet. Select a script above or type run <command>.';$('connection').textContent=`Local Python connected · ${jobs.filter(j=>j.status==='running').length} running · ${jobs.length} total` }catch(e){$('connection').textContent='Bridge error: '+e}finally{busy=false}}
+async function poll(){if(!bridgeReady||busy)return;busy=true;try{if(!$('manage-work-page').hidden)loadAutomation();jobs=await window.pywebview.api.jobs();if(!(prefs.layout==='canvas'&&canvasDragging))renderJobs();if(!$('log-audit-page').hidden){try{auditCurrentJobs=await window.pywebview.api.audit_current_session();auditCurrentIds=new Set(auditCurrentJobs.map(job=>job.id));renderAuditCurrent()}catch(error){$('audit-current-results').textContent='Unable to refresh current-session jobs: '+(error.message||error)}}$('connection').textContent=`Local Python connected · ${jobs.filter(j=>j.status==='running').length} running · ${jobs.length} total` }catch(e){$('connection').textContent='Bridge error: '+e}finally{busy=false}}
 window.addEventListener('pywebviewready',async()=>{
   bridgeReady=true;
   log('Python bridge connected');
@@ -930,6 +1004,11 @@ backgroundStyle.textContent=`
   .connected-layout .live-events{display:flex;flex-direction:column;min-height:0}
   .live-events-head{display:flex;align-items:center;justify-content:space-between;min-height:47px;padding:0 13px;border-bottom:1px solid var(--border)}
   .live-events-head h2{margin:0;color:var(--text);font-size:12px;letter-spacing:.12em}
+  .live-events-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--border)}
+  .live-events-controls button{font-size:11px;padding:4px 8px}
+  .live-events-controls span{margin-left:auto;font-size:10px;color:var(--muted)}
+  header .left{flex-wrap:wrap;min-width:0}
+  @media(max-width:1100px){header{flex-wrap:wrap}header .right{margin-left:auto}}
   .live-events-head>span{display:flex;align-items:center;gap:6px;padding:3px 8px;border:1px solid color-mix(in srgb,#72e0b4 30%,transparent);border-radius:20px;color:#72e0b4;font-size:10px}
   .live-events-head>span i{width:7px;height:7px;border-radius:50%;background:#72e0b4;box-shadow:0 0 8px #72e0b4}
   #live-events-list{display:flex;flex:1;flex-direction:column;min-height:0;overflow-y:auto;margin:0;padding:0;list-style:none;scrollbar-color:color-mix(in srgb,var(--accent) 30%,transparent) transparent}

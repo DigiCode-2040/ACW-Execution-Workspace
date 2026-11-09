@@ -61,6 +61,28 @@ main{padding:22px;max-width:1800px;margin:auto}
 .audit-detail h3{margin:0 0 5px;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
 .audit-detail pre{margin:0;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#afc8d3;font:11px/1.6 ui-monospace,Consolas,monospace}
 .audit-paths{margin:0;padding-left:18px;overflow-wrap:anywhere;color:#afc8d3;font:11px/1.6 ui-monospace,Consolas,monospace}
+.automation-section{margin-top:28px;flex:none}
+.automation-section>h2{color:var(--accent);font-size:15px}
+.automation-section>h3{font-size:13px;color:var(--muted);margin-top:20px}
+.automation-section .manage-work-form{margin-bottom:14px}
+.automation-section select,.automation-section input{max-width:100%;min-width:0}
+.group-picker{border:1px solid var(--border);border-radius:8px;padding:12px;min-width:0}
+.group-picker legend{color:var(--muted);font-size:12px}
+#group-script-picker{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;max-height:220px;overflow:auto}
+.group-script-choice{display:flex;align-items:center;gap:8px;overflow-wrap:anywhere}
+.group-script-choice input{accent-color:var(--accent)}
+.group-order{margin:0;padding-left:24px}
+.group-order li{padding:5px 0}
+.group-order button{padding:2px 8px;margin-left:6px}
+.automation-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.automation-card{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin:10px 0;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
+.automation-card h3{margin:0;font-size:14px;overflow-wrap:anywhere}
+.automation-card p{margin:5px 0;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.automation-card .automation-actions{flex:none}
+#automation-message{position:sticky;bottom:0;margin:12px 0 0;padding:10px;background:var(--bg);color:var(--accent);flex:none}
+#automation-message:empty{display:none}
+#automation-message.error{color:#fda4af}
+@media(max-width:750px){.automation-card{flex-direction:column}}
 .manage-work-form{max-width:760px;padding:18px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
 .manage-work-form h2,.registered-scripts-section h2{margin:0 0 5px;color:var(--text);font-size:14px}
 .manage-work-form>p{margin:0 0 16px}
@@ -164,6 +186,7 @@ body.compact .job{padding:10px}
       <button data-menu="layouts">▦ Layout ▾</button>
       <div id="layouts" class="popup" hidden><b>Organization</b><div id="layout-options"></div></div>
     </div>
+    <button id="workspace-nav" type="button" aria-controls="execution-page" aria-pressed="true">Workspace</button>
     <button id="manage-work-nav" type="button" aria-controls="manage-work-page" aria-pressed="false">Manage Work</button>
     <button id="log-audit-nav" type="button" aria-controls="log-audit-page" aria-pressed="false">Log Audit</button>
   </div>
@@ -266,6 +289,32 @@ body.compact .job{padding:10px}
       <h2 id="registered-scripts-heading">Registered scripts</h2>
       <div id="registered-scripts-list" aria-live="polite"></div>
     </section>
+    <section class="automation-section" aria-labelledby="groups-heading">
+      <h2 id="groups-heading">Script groups</h2>
+      <p class="subtle">Select scripts in execution order. Sequential runs stop on failure or cancellation. Parallel runs use the workspace concurrency limit.</p>
+      <form id="group-form" class="manage-work-form">
+        <div class="manage-field"><label for="group-name">Group name</label><input id="group-name" required maxlength="80" placeholder="Morning reports"></div>
+        <div class="manage-field"><label for="group-mode">Execution</label><select id="group-mode"><option value="sequential">Sequential — one at a time</option><option value="parallel">Parallel — together, within concurrency limit</option></select></div>
+        <fieldset class="group-picker"><legend>Select scripts</legend><div id="group-script-picker"><p class="subtle">Open Manage Work to load scripts.</p></div></fieldset>
+        <div class="manage-field"><span>Execution order</span><ol id="group-order" class="group-order"></ol></div>
+        <div class="automation-actions"><button id="save-group" type="submit">Create group</button><button id="reset-group" type="button" hidden>Cancel editing</button></div>
+      </form>
+      <div id="groups-list" aria-live="polite"></div>
+      <h3>Recent group runs</h3>
+      <div id="group-runs-list" aria-live="polite"></div>
+    </section>
+    <section class="automation-section" aria-labelledby="schedules-heading">
+      <h2 id="schedules-heading">Schedules</h2>
+      <p class="subtle">Runs only while ACW is open. Missed times are skipped when reopening; active targets never overlap. Times below use your local timezone.</p>
+      <form id="schedule-form" class="manage-work-form">
+        <div class="manage-field"><label for="schedule-target">Script or group</label><select id="schedule-target" required><option value="">Choose a script or group</option></select></div>
+        <div class="manage-field"><label for="schedule-start">First run (local date and time)</label><input id="schedule-start" type="datetime-local" required></div>
+        <div class="manage-field"><label for="schedule-repeat">Repeat</label><select id="schedule-repeat"><option value="once">Once</option><option value="hourly">Every 1 hour</option><option value="daily">Every 24 hours</option></select></div>
+        <button id="save-schedule" type="submit">Create schedule</button>
+      </form>
+      <div id="schedules-list" aria-live="polite"></div>
+    </section>
+    <p id="automation-message" role="status" aria-live="polite"></p>
   </section>
 
   <section id="log-audit-page" class="page-view" hidden>
@@ -321,5 +370,6 @@ body.compact .job{padding:10px}
 </main>
 
 <script src="app.js"></script>
+<script src="automation.js"></script>
 </body>
 </html>

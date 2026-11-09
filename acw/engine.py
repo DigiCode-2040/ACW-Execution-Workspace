@@ -14,6 +14,8 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 
+from acw.automation import Automation
+
 try:
     import psutil
 except ImportError:
@@ -125,6 +127,7 @@ class Engine:
         self._averages = {}  # script_name -> list of recent runtimes
         self._load_averages()
         self._restore_last_session()
+        self.automation = Automation(self, RUN_DIR / 'automation.json')
 
     # ------------------------------------------------------------------
     # Script discovery
@@ -592,6 +595,7 @@ class Engine:
                 label=script['label'],
                 kind=kind,
                 status='queued',
+                failure_dismissed=False,
                 started=None,
                 ended=None,
                 runtime=0,
@@ -621,8 +625,12 @@ class Engine:
 
             # Prune old finished jobs if over limit
             if len(self.jobs) > MAX_RUNS:
+                protected = {job_id for run in self.automation.runs.values()
+                             if run['status'] == 'running' for job_id in run['job_ids']}
                 for key in list(self.jobs):
-                    if self.jobs[key]['status'] not in ('queued', 'running', 'cancelling'):
+                    old_job = self.jobs[key]
+                    unacknowledged_failure = old_job['status'] == 'failed' and not old_job.get('failure_dismissed')
+                    if key not in protected and not unacknowledged_failure and old_job['status'] not in ('queued', 'running', 'cancelling'):
                         del self.jobs[key]
                         self.audit_session_job_ids.discard(key)
                         self.job_scripts.pop(key, None)
@@ -664,7 +672,8 @@ class Engine:
     # Run loop
     # ------------------------------------------------------------------
     def _event(self, job, kind, message):
-        job['events'].append({'time': stamp(), 'kind': kind, 'message': str(message)[:500]})
+        job['events'].append({'id': uuid.uuid4().hex, 'time': datetime.now(timezone.utc).isoformat(),
+                              'kind': kind, 'message': str(message)[:500]})
         job['events'] = job['events'][-MAX_LINES:]
 
     def _record_stage_timing(self, job):
@@ -1023,7 +1032,7 @@ class Engine:
                     warnings.append(f'{path.name}: jobs must be a list.')
 
         for path in RUN_DIR.glob('*.json'):
-            if path.name in (SESSION_FILE.name, REGISTERED_SCRIPTS_FILE.name):
+            if path.name in (SESSION_FILE.name, REGISTERED_SCRIPTS_FILE.name, 'automation.json'):
                 continue
             try:
                 add_record(json.loads(path.read_text(encoding='utf-8')))
@@ -1100,6 +1109,9 @@ class Engine:
             'historical_avg_seconds': job.get('historical_avg_seconds'),
             'arguments': job.get('arguments') or [],
             'output_dirs': job.get('output_dirs') or [],
+            'group_name': job.get('group_name'),
+            'group_run_id': job.get('group_run_id'),
+            'failure_dismissed': job.get('failure_dismissed', False),
         }
 
     def _auto_save_session(self):
@@ -1129,10 +1141,12 @@ class Engine:
             jid = j['id']
             if jid in jobs:
                 raise ValueError(f'Duplicate session job ID: {jid}.')
+            if not isinstance(j.get('failure_dismissed', False), bool):
+                raise ValueError('Session failure_dismissed must be true or false.')
             for key in ('name', 'status', 'kind'):
                 if key in j and not isinstance(j[key], str):
                     raise ValueError(f'Session job {key} must be a string.')
-            for key in ('label', 'stage', 'started', 'ended'):
+            for key in ('label', 'stage', 'started', 'ended', 'group_name', 'group_run_id'):
                 if j.get(key) is not None and not isinstance(j[key], str):
                     raise ValueError(f'Session job {key} must be a string or null.')
             for key in ('output', 'artifacts', 'arguments', 'output_dirs'):
@@ -1184,6 +1198,9 @@ class Engine:
                 historical_avg_seconds=j.get('historical_avg_seconds'),
                 arguments=j.get('arguments') or [],
                 output_dirs=list(j.get('output_dirs', default_roots)),
+                group_name=j.get('group_name'),
+                group_run_id=j.get('group_run_id'),
+                failure_dismissed=j.get('failure_dismissed', False),
             )
             jobs[jid] = job
         return jobs
@@ -1305,6 +1322,17 @@ class Engine:
     def snapshot(self):
         with self.lock:
             return json.loads(json.dumps(list(reversed(list(self.jobs.values())))))
+
+    def dismiss_failure(self, job_id):
+        """Acknowledge a failure without removing its job or audit record."""
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job or job['status'] != 'failed':
+                raise ValueError('Select a failed job to dismiss.')
+            job['failure_dismissed'] = True
+            self._save(job)
+            self._auto_save_session()
+        return {'ok': True}
 
     # ------------------------------------------------------------------
     # Artifacts

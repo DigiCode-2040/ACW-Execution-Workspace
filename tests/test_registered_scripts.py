@@ -206,6 +206,46 @@ class RegisteredScriptTests(unittest.TestCase):
         self.assertEqual(registered['working_directory'], str(self.external_directory.resolve()))
         self.assertTrue(registered['available'])
 
+    def test_failure_dismissal_persists_without_removing_audit_details(self):
+        self.register_external()
+        with patch.object(self.engine, '_launch'):
+            job_id = self.engine.start('custom-task')['id']
+        job = self.engine.jobs[job_id]
+        job.update(status='failed', ended=engine_module.stamp(), output=['failure details'])
+        self.engine.dismiss_failure(job_id)
+        restored = Engine()
+        self.assertTrue(restored.jobs[job_id]['failure_dismissed'])
+        self.assertEqual(restored.jobs[job_id]['output'], ['failure details'])
+        self.assertEqual(restored.search_audit(job_id)['jobs'][0]['status'], 'failed')
+        self.assertTrue(next(item for item in self.engine.audit_current_session()
+                             if item['id'] == job_id)['failure_dismissed'])
+
+    def test_only_failed_jobs_can_be_dismissed(self):
+        self.register_external()
+        with patch.object(self.engine, '_launch'):
+            job_id = self.engine.start('custom-task')['id']
+        for target in (job_id, 'missing'):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                self.engine.dismiss_failure(target)
+
+    def test_undismissed_failure_survives_workspace_pruning(self):
+        self.register_external()
+        with patch.object(self.engine, '_launch'), patch.object(engine_module, 'MAX_RUNS', 1):
+            failed = self.engine.start('custom-task')['id']
+            self.engine.jobs[failed]['status'] = 'failed'
+            next_job = self.engine.start('custom-task')['id']
+            self.assertIn(failed, self.engine.jobs)
+            self.engine.dismiss_failure(failed)
+            self.engine.jobs[next_job]['status'] = 'completed'
+            self.engine.start('custom-task')
+            self.assertNotIn(failed, self.engine.jobs)
+
+    def test_event_ids_distinguish_identical_events(self):
+        job = {'events': []}
+        self.engine._event(job, 'output', 'same output')
+        self.engine._event(job, 'output', 'same output')
+        self.assertNotEqual(job['events'][0]['id'], job['events'][1]['id'])
+
     def test_slots_are_reserved_before_workers_start_and_queue_drains_in_order(self):
         self.register_external()
         self.engine.set_max_concurrent(1)

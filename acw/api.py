@@ -24,6 +24,34 @@ class API:
     def start_job(self, name, script_args=None):
         return self.engine.start(name, script_args)
 
+    def automation_state(self):
+        return self.engine.automation.state()
+
+    def save_group(self, name, scripts, mode, group_id=None):
+        return self.engine.automation.save_group(name, scripts, mode, group_id)
+
+    def delete_group(self, group_id):
+        return self.engine.automation.delete_group(group_id)
+
+    def start_group(self, group_id):
+        return self.engine.automation.start_group(group_id)
+
+    def cancel_group(self, run_id):
+        return self.engine.automation.cancel_group(run_id)
+
+    def create_schedule(self, target_kind, target_id, start_at, repeat):
+        return self.engine.automation.create_schedule(target_kind, target_id, start_at, repeat)
+
+    def set_schedule_enabled(self, schedule_id, enabled):
+        return self.engine.automation.set_schedule_enabled(schedule_id, enabled)
+
+    def delete_schedule(self, schedule_id):
+        return self.engine.automation.delete_schedule(schedule_id)
+
+    def shutdown(self):
+        self.engine.automation.stop()
+        self.engine._auto_save_session()
+
     def reload_catalog(self):
         return self.engine.reload_catalog()
 
@@ -92,6 +120,9 @@ class API:
     def cancel_job(self, job_id):
         return self.engine.cancel(job_id)
 
+    def dismiss_failure(self, job_id):
+        return self.engine.dismiss_failure(job_id)
+
     def open_artifact(self, job_id, artifact):
         return self.engine.open_artifact(job_id, artifact)
 
@@ -126,7 +157,7 @@ class API:
         return self.engine.compare_script(script_name, limit)
 
     def exit_app(self):
-        self.engine._auto_save_session()
+        self.shutdown()
         import webview
         if not webview.windows:
             raise RuntimeError('No application window is available to close.')
